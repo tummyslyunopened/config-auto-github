@@ -54,8 +54,8 @@ function Start-WorkerRun {
 # Form -- compact, portrait, no transcript pane.
 $form               = New-Object System.Windows.Forms.Form
 $form.Text          = "config-auto-github"
-$form.Size          = New-Object System.Drawing.Size(1080, 540)
-$form.MinimumSize   = New-Object System.Drawing.Size(480, 420)
+$form.ClientSize    = New-Object System.Drawing.Size(1064, 580)
+$form.MinimumSize   = New-Object System.Drawing.Size(480, 480)
 $form.StartPosition = "CenterScreen"
 $form.BackColor     = $cBg
 $form.ForeColor     = $cText
@@ -71,30 +71,42 @@ function New-Label { param($text, $x, $y, $w = 1056, $font = $fUi, $h = 28)
     $l
 }
 
+$horizAnchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
 # Title
-$lblTitle = New-Label "config-auto-github" 16 12 800 $fUiBold 32
+$lblTitle = New-Label "config-auto-github" 16 12 ($form.ClientSize.Width - 32) $fUiBold 32
+$lblTitle.Anchor = $horizAnchor
 $form.Controls.Add($lblTitle)
 
-# Status panel
+# Status panel -- full width, anchored so it does not clip on narrow clients
 $pnlStatus = New-Object System.Windows.Forms.Panel
 $pnlStatus.Location = New-Object System.Drawing.Point(8, 56)
-$pnlStatus.Size     = New-Object System.Drawing.Size(1056, 168)
+$pnlStatus.Size     = New-Object System.Drawing.Size(($form.ClientSize.Width - 16), 168)
+$pnlStatus.Anchor   = $horizAnchor
 $pnlStatus.BackColor = $cPanel
 $pnlStatus.BorderStyle = "FixedSingle"
 $form.Controls.Add($pnlStatus)
 
-$lblMonitor = New-Label "Monitor : --" 12 12  1040 $fMono 28
-$lblWorker  = New-Label "Worker  : --" 12 44  1040 $fMono 28
-$lblCounts  = New-Label ""             12 80  1040 $fMono 28
-$lblActive  = New-Label ""             12 116 1040 $fMono 28
+$innerW = $pnlStatus.ClientSize.Width - 24
+$lblMonitor = New-Label "Monitor : --" 12 12  $innerW $fMono 28
+$lblWorker  = New-Label "Worker  : --" 12 44  $innerW $fMono 28
+$lblCounts  = New-Label ""             12 80  $innerW $fMono 28
+$lblActive  = New-Label ""             12 116 $innerW $fMono 28
 $lblActive.ForeColor = $cGreen
-foreach ($l in @($lblMonitor, $lblWorker, $lblCounts, $lblActive)) { $pnlStatus.Controls.Add($l) }
+foreach ($l in @($lblMonitor, $lblWorker, $lblCounts, $lblActive)) {
+    $l.Anchor = $horizAnchor
+    $pnlStatus.Controls.Add($l)
+}
 
-# Two big toggle buttons
+# Two big toggle buttons -- stacked vertically full width so neither clips
+# on narrow client widths or DPI-scaled displays.
+$btnAnchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+
 $btnMon = New-Object System.Windows.Forms.Button
 $btnMon.Text     = "Start Monitor"
 $btnMon.Location = New-Object System.Drawing.Point(8, 244)
-$btnMon.Size     = New-Object System.Drawing.Size(528, 96)
+$btnMon.Size     = New-Object System.Drawing.Size(($form.ClientSize.Width - 16), 88)
+$btnMon.Anchor   = $btnAnchor
 $btnMon.BackColor = $cBtnMon
 $btnMon.ForeColor = $cText
 $btnMon.FlatStyle = "Flat"
@@ -104,8 +116,9 @@ $form.Controls.Add($btnMon)
 
 $btnWrk = New-Object System.Windows.Forms.Button
 $btnWrk.Text     = "Start Worker"
-$btnWrk.Location = New-Object System.Drawing.Point(544, 244)
-$btnWrk.Size     = New-Object System.Drawing.Size(520, 96)
+$btnWrk.Location = New-Object System.Drawing.Point(8, 340)
+$btnWrk.Size     = New-Object System.Drawing.Size(($form.ClientSize.Width - 16), 88)
+$btnWrk.Anchor   = $btnAnchor
 $btnWrk.BackColor = $cBtnWrk
 $btnWrk.ForeColor = $cText
 $btnWrk.FlatStyle = "Flat"
@@ -114,12 +127,12 @@ $btnWrk.FlatAppearance.BorderSize = 0
 $form.Controls.Add($btnWrk)
 
 # Monitor interval picker
-$lblIntCap = New-Label "Monitor interval:" 16 360 220 $fUi 28
+$lblIntCap = New-Label "Monitor interval:" 16 444 220 $fUi 28
 $lblIntCap.ForeColor = $cDim
 $form.Controls.Add($lblIntCap)
 
 $numInterval = New-Object System.Windows.Forms.NumericUpDown
-$numInterval.Location  = New-Object System.Drawing.Point(244, 356)
+$numInterval.Location  = New-Object System.Drawing.Point(244, 440)
 $numInterval.Size      = New-Object System.Drawing.Size(96, 32)
 $numInterval.Minimum   = 1
 $numInterval.Maximum   = 60
@@ -133,7 +146,7 @@ $numInterval.add_ValueChanged({
 })
 $form.Controls.Add($numInterval)
 
-$lblIntUnit = New-Label "minutes" 350 360 120 $fUi 28
+$lblIntUnit = New-Label "minutes" 350 444 120 $fUi 28
 $lblIntUnit.ForeColor = $cDim
 $form.Controls.Add($lblIntUnit)
 
