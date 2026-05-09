@@ -166,7 +166,11 @@ $Guidelines
 
     [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null }
     $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
-        $_.status = $exitStatus
+        # Preserve "cancelled" status set externally (e.g. by the GUI Cancel button)
+        # so we do not overwrite it with the natural exit status.
+        if ($_.status -ne "cancelled") {
+            $_.status = $exitStatus
+        }
         $_ | Add-Member -NotePropertyName "completedAt" -NotePropertyValue (Get-Date -Format "o") -Force
         $_ | Add-Member -NotePropertyName "elapsedSec"  -NotePropertyValue $elapsed -Force
     }
