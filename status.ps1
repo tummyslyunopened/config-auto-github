@@ -32,9 +32,6 @@ while ($true) {
     $worker  = Get-ScheduledTask -TaskName "config-auto-github-worker"  -ErrorAction SilentlyContinue
     $mState  = if ($monitor) { $monitor.State } else { "not installed" }
     $wState  = if ($worker)  { $worker.State  } else { "not installed" }
-    $mColor  = if ($mState -eq "Running") { "Green" } else { "Gray" }
-    $wColor  = if ($wState -eq "Running") { "Green" } elseif ($wState -eq "Ready") { "Yellow" } else { "Gray" }
-
     Write-Host ("  monitor  [{0,-14}]   worker  [{1,-14}]" -f $mState, $wState)
     Write-Host ""
 
@@ -47,7 +44,7 @@ while ($true) {
         $pending    = @($Queue | Where-Object { $_.status -eq "pending" })
         $inProgress = @($Queue | Where-Object { $_.status -eq "in_progress" })
         $done       = @($Queue | Where-Object { $_.status -eq "done" })
-        $errors     = @($Queue | Where-Object { $_.status -eq "error" })
+        $errors     = @($Queue | Where-Object { $_.status -in @("error","timeout") })
 
         Write-Host ("  pending {0}  |  in_progress {1}  |  done {2}  |  error {3}  |  total {4}" `
             -f $pending.Count, $inProgress.Count, $done.Count, $errors.Count, $Queue.Count)

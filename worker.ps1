@@ -5,6 +5,15 @@ $Guidelines = if (Test-Path "$ScriptDir\guidelines.md") { Get-Content "$ScriptDi
 
 . "$ScriptDir\lib.ps1"
 
+# Prevent git, gh, and ssh from blocking on interactive prompts
+$env:GIT_TERMINAL_PROMPT  = "0"   # git: never ask for credentials
+$env:GIT_EDITOR           = "true" # git: no-op editor so commit/rebase never open vim
+$env:GH_PROMPT_DISABLED   = "1"   # gh: disable interactive prompts
+$env:SSH_ASKPASS          = ""     # suppress SSH passphrase GUI
+$env:GCM_INTERACTIVE      = "never" # git credential manager: non-interactive
+
+$TimeoutSeconds = 1800  # hard kill per item after 30 minutes
+
 Set-Location $RepoRoot
 Write-Log "Worker started. Syncing submodules..."
 git submodule update --init --recursive 2>$null
@@ -100,23 +109,45 @@ $Guidelines
 
     # Run claude, capture full transcript to log file
     $null = New-Item -ItemType Directory -Force -Path "$ScriptDir\logs"
-    try {
-        $header = @"
+    $header = @"
 # Transcript: $($Next.id)
 # Type:       $($Next.type)
 # Repo:       $($Next.repo) #$($Next.number)
 # Started:    $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))
+# Timeout:    ${TimeoutSeconds}s
 # -------------------------------------------------------
 
 "@
-        Set-Content $TranscriptFile -Value $header -Encoding utf8
-        claude --print --dangerously-skip-permissions $Prompt 2>&1 | Tee-Object -FilePath $TranscriptFile -Append
-        $exitStatus = "done"
-    } catch {
-        Write-Log "ERROR running claude for $($Next.id): $_" "ERROR"
-        Add-Content $TranscriptFile -Value "`n[ERROR] $_" -Encoding utf8
-        $exitStatus = "error"
+    Set-Content $TranscriptFile -Value $header -Encoding utf8
+
+    # Run in a background job so we can enforce a hard timeout
+    $job = Start-Job -ScriptBlock {
+        param($prompt, $transcriptFile)
+        $env:GIT_TERMINAL_PROMPT = "0"
+        $env:GIT_EDITOR          = "true"
+        $env:GH_PROMPT_DISABLED  = "1"
+        claude --print --dangerously-skip-permissions $prompt 2>&1
+    } -ArgumentList $Prompt, $TranscriptFile
+
+    $completed = Wait-Job $job -Timeout $TimeoutSeconds
+
+    if ($completed) {
+        Receive-Job $job | Tee-Object -FilePath $TranscriptFile -Append
+        $exitStatus = if ($job.State -eq "Failed") { "error" } else { "done" }
+        if ($job.State -eq "Failed") {
+            $err = $job.ChildJobs[0].JobStateInfo.Reason.Message
+            Write-Log "Job failed for $($Next.id): $err" "ERROR"
+            Add-Content $TranscriptFile -Value "`n[JOB FAILED] $err" -Encoding utf8
+        }
+    } else {
+        Stop-Job $job
+        $exitStatus = "timeout"
+        $msg = "Timed out after ${TimeoutSeconds}s — killed."
+        Write-Log $msg "ERROR"
+        Add-Content $TranscriptFile -Value "`n[TIMEOUT] $msg" -Encoding utf8
+        Send-Toast "claude TIMEOUT" "$($Next.id) killed after ${TimeoutSeconds}s"
     }
+    Remove-Job $job -Force
 
     $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
 
@@ -131,7 +162,11 @@ $Guidelines
 
     $pendingLeft = @($Queue | Where-Object { $_.status -eq "pending" }).Count
     Write-Log "$exitStatus $($Next.id) in ${elapsed}s. $pendingLeft item(s) remaining."
-    Send-Toast "claude finished: $($Next.type)" "$($Next.repo) #$($Next.number) — ${elapsed}s. $pendingLeft left."
+    if ($exitStatus -eq "done") {
+        Send-Toast "claude done: $($Next.type)" "$($Next.repo) #$($Next.number) — ${elapsed}s. $pendingLeft left."
+    } elseif ($exitStatus -eq "error") {
+        Send-Toast "claude ERROR: $($Next.id)" "Check logs\$($Next.id).log"
+    }
 }
 
 Write-Log "Worker: queue empty, exiting."
