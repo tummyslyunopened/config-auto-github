@@ -22,9 +22,9 @@ $Repos = @(
 )
 
 function Test-AllowedAuthor {
-    param([string]$Login)
+    param([string]$Login, [string]$Context)
     if ($Login -in $AllowedAuthors) { return $true }
-    Write-Log "SKIPPED - author '$Login' not in allowlist" "WARN"
+    Write-Log "SKIPPED [$Context] author='$Login'" "WARN"
     return $false
 }
 
@@ -39,109 +39,86 @@ Write-Log "Monitor run started. Checking $($Repos.Count) repos since $Since. All
 foreach ($R in $Repos) {
     $slug = $R.repo.Split("/")[1]
 
-    # Open issues - author field required to enforce allowlist
+    # Open issues
     try {
         $issues = @(gh issue list --repo $R.repo --state open --json number,title,body,assignees,author 2>$null | ConvertFrom-Json)
+        Write-Log "[$slug] issues: $($issues.Count) open"
         foreach ($issue in $issues) {
-            if (-not (Test-AllowedAuthor $issue.author.login)) { continue }
-            if ($issue.assignees.Count -gt 0) { continue }
+            if (-not $issue.number) { Write-Log "[$slug] skipping phantom issue (empty number/author)" "WARN"; continue }
+            $login = $issue.author.login
+            Write-Log "[$slug] issue #$($issue.number) author='$login' assignees=$($issue.assignees.Count)"
+            if (-not (Test-AllowedAuthor $login "issue #$($issue.number) in $slug")) { continue }
+            if ($issue.assignees.Count -gt 0) { Write-Log "[$slug] issue #$($issue.number) skipped - already assigned"; continue }
             $id = "issue-$slug-$($issue.number)"
-            if ($id -in $ExistingIds) { continue }
+            if ($id -in $ExistingIds) { Write-Log "[$slug] $id already in queue (status=$(($Queue | Where-Object {$_.id -eq $id}).status))"; continue }
             $existingPR = @(gh pr list --repo $R.repo --search "closes #$($issue.number) in:body" --json number 2>$null | ConvertFrom-Json)
-            if ($existingPR.Count -gt 0) { continue }
+            if ($existingPR.Count -gt 0) { Write-Log "[$slug] issue #$($issue.number) skipped - PR exists"; continue }
 
             $Queue += [PSCustomObject]@{
-                id       = $id
-                type     = "new_issue"
-                repo     = $R.repo
-                repoPath = $R.path
-                number   = $issue.number
-                title    = $issue.title
-                body     = $issue.body
-                author   = $issue.author.login
-                addedAt  = (Get-Date -Format "o")
-                status   = "pending"
-                transcript = ""
+                id = $id; type = "new_issue"; repo = $R.repo; repoPath = $R.path
+                number = $issue.number; title = $issue.title; body = $issue.body; author = $login
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
-            $ExistingIds += $id
-            $Added++
-            Write-Log "Queued new_issue: $id - '$($issue.title)' by $($issue.author.login)"
+            $ExistingIds += $id; $Added++
+            Write-Log "[$slug] QUEUED new_issue: $id - '$($issue.title)'"
         }
-    } catch { Write-Log "Error fetching issues for $($R.repo): $_" "WARN" }
+    } catch { Write-Log "[$slug] ERROR fetching issues: $_" "ERROR" }
 
     # Issue comments
     try {
         $apiUrl  = "repos/$($R.repo)/issues/comments"
         $params  = "sort=created&direction=desc&per_page=50"
         $comments = @(gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json)
-        foreach ($c in $comments) {
-            if ($c.created_at -le $Since) { continue }
-            if (-not (Test-AllowedAuthor $c.user.login)) { continue }
+        $recent  = @($comments | Where-Object { $_.created_at -gt $Since })
+        Write-Log "[$slug] issue comments: $($comments.Count) total, $($recent.Count) since $Since"
+        foreach ($c in $recent) {
+            $login = $c.user.login; $type = $c.user.type
+            Write-Log "[$slug] comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
+            if (-not (Test-AllowedAuthor $login "issue-comment $($c.id) in $slug")) { continue }
             $id = "comment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $issueNum = [int]($c.issue_url -replace ".*/")
-
             $Queue += [PSCustomObject]@{
-                id       = $id
-                type     = "issue_comment"
-                repo     = $R.repo
-                repoPath = $R.path
-                number   = $issueNum
-                author   = $c.user.login
-                body     = $c.body
-                url      = $c.html_url
-                addedAt  = (Get-Date -Format "o")
-                status   = "pending"
-                transcript = ""
+                id = $id; type = "issue_comment"; repo = $R.repo; repoPath = $R.path
+                number = $issueNum; author = $login; body = $c.body; url = $c.html_url
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
-            $ExistingIds += $id
-            $Added++
-            Write-Log "Queued issue_comment: $id - by $($c.user.login) on #$issueNum"
+            $ExistingIds += $id; $Added++
+            Write-Log "[$slug] QUEUED issue_comment: $id by $login on #$issueNum"
         }
-    } catch { Write-Log "Error fetching issue comments for $($R.repo): $_" "WARN" }
+    } catch { Write-Log "[$slug] ERROR fetching issue comments: $_" "ERROR" }
 
     # PR review comments
     try {
-        $apiUrl    = "repos/$($R.repo)/pulls/comments"
-        $params    = "sort=created&direction=desc&per_page=50"
+        $apiUrl     = "repos/$($R.repo)/pulls/comments"
+        $params     = "sort=created&direction=desc&per_page=50"
         $prComments = @(gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json)
-        foreach ($c in $prComments) {
-            if ($c.created_at -le $Since) { continue }
-            if (-not (Test-AllowedAuthor $c.user.login)) { continue }
+        $recent     = @($prComments | Where-Object { $_.created_at -gt $Since })
+        Write-Log "[$slug] PR review comments: $($prComments.Count) total, $($recent.Count) since $Since"
+        foreach ($c in $recent) {
+            $login = $c.user.login; $type = $c.user.type
+            Write-Log "[$slug] pr-comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
+            if (-not (Test-AllowedAuthor $login "pr-comment $($c.id) in $slug")) { continue }
             $id = "prcomment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $prNum = [int]($c.pull_request_url -replace ".*/")
-
             $Queue += [PSCustomObject]@{
-                id       = $id
-                type     = "pr_review_comment"
-                repo     = $R.repo
-                repoPath = $R.path
-                number   = $prNum
-                author   = $c.user.login
-                body     = $c.body
-                filePath = $c.path
-                addedAt  = (Get-Date -Format "o")
-                status   = "pending"
-                transcript = ""
+                id = $id; type = "pr_review_comment"; repo = $R.repo; repoPath = $R.path
+                number = $prNum; author = $login; body = $c.body; filePath = $c.path
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
-            $ExistingIds += $id
-            $Added++
-            Write-Log "Queued pr_review_comment: $id - by $($c.user.login) on PR #$prNum"
+            $ExistingIds += $id; $Added++
+            Write-Log "[$slug] QUEUED pr_review_comment: $id by $login on PR #$prNum"
         }
-    } catch { Write-Log "Error fetching PR comments for $($R.repo): $_" "WARN" }
+    } catch { Write-Log "[$slug] ERROR fetching PR comments: $_" "ERROR" }
 }
 
 $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
-
 $pendingCount = @($Queue | Where-Object { $_.status -eq "pending" }).Count
 Write-Log "Monitor done. +$Added queued. Pending: $pendingCount. Total: $($Queue.Count)."
 
-if ($Added -gt 0) {
-    Send-Toast "config-auto-github" "$Added new item(s) queued. $pendingCount pending."
-}
+if ($Added -gt 0) { Send-Toast "config-auto-github" "$Added new item(s) queued. $pendingCount pending." }
 
-# Start worker if there are pending items and it is not already running
 if ($pendingCount -gt 0) {
     $task = Get-ScheduledTask -TaskName "config-auto-github-worker" -ErrorAction SilentlyContinue
     if ($task -and $task.State -ne "Running") {
