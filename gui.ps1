@@ -19,10 +19,11 @@ $cBtnMon = [System.Drawing.Color]::FromArgb(0,   100, 160)
 $cBtnWrk = [System.Drawing.Color]::FromArgb(30,  110, 60)
 $cBtnGh  = [System.Drawing.Color]::FromArgb(50,  50,  50)
 
-$fMono   = New-Object System.Drawing.Font("Consolas",  9)
-$fMonoSm = New-Object System.Drawing.Font("Consolas",  8)
-$fUi     = New-Object System.Drawing.Font("Segoe UI",  9)
-$fUiBold = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+# Bigger fonts -- target screen is a 1080x2404 phone via remote desktop.
+$fMono   = New-Object System.Drawing.Font("Consolas",   11)
+$fMonoSm = New-Object System.Drawing.Font("Consolas",    9)
+$fUi     = New-Object System.Drawing.Font("Segoe UI",   11)
+$fUiBold = New-Object System.Drawing.Font("Segoe UI",   14, [System.Drawing.FontStyle]::Bold)
 
 # State
 $script:MonitorProc            = $null
@@ -39,16 +40,17 @@ $script:MonitorIntervalSec = 300  # auto-rerun monitor; updated live by the inte
 # Form
 $form               = New-Object System.Windows.Forms.Form
 $form.Text          = "config-auto-github"
-$form.Size          = New-Object System.Drawing.Size(1150, 780)
-$form.MinimumSize   = New-Object System.Drawing.Size(900, 600)
+$form.Size          = New-Object System.Drawing.Size(1080, 2380)
+$form.MinimumSize   = New-Object System.Drawing.Size(480, 800)
 $form.StartPosition = "CenterScreen"
 $form.BackColor     = $cBg
 $form.ForeColor     = $cText
 
-# Split
+# Horizontal split: controls on top, transcript on bottom (portrait layout).
 $split                  = New-Object System.Windows.Forms.SplitContainer
 $split.Dock             = "Fill"
-$split.SplitterDistance = 370
+$split.Orientation      = [System.Windows.Forms.Orientation]::Horizontal
+$split.SplitterDistance = 860
 $split.SplitterWidth    = 4
 $split.BackColor        = $cBorder
 $split.Panel1.BackColor = $cBg
@@ -56,11 +58,11 @@ $split.Panel2.BackColor = $cBg
 $form.Controls.Add($split)
 
 # Helper: label
-function New-Label { param($text, $x, $y, $w = 340, $font = $fUi)
+function New-Label { param($text, $x, $y, $w = 340, $font = $fUi, $h = 24)
     $l = New-Object System.Windows.Forms.Label
     $l.Text = $text
     $l.Location = New-Object System.Drawing.Point($x, $y)
-    $l.Size = New-Object System.Drawing.Size($w, 20)
+    $l.Size = New-Object System.Drawing.Size($w, $h)
     $l.Font = $font
     $l.ForeColor = $cText
     $l.BackColor = [System.Drawing.Color]::Transparent
@@ -81,45 +83,45 @@ function New-Btn { param($text, $x, $y, $w, $h = 36, $col = $cBtnGh)
     $b
 }
 
-# ---- LEFT PANEL ----
+# ---- TOP PANEL (status + queue + controls) ----
 
-$lblTitle = New-Label "config-auto-github" 12 14 300 $fUiBold
+$lblTitle = New-Label "config-auto-github" 16 12 800 $fUiBold 32
 $split.Panel1.Controls.Add($lblTitle)
 
-# Status panel
+# Status panel -- full width
 $pnlStatus           = New-Object System.Windows.Forms.Panel
-$pnlStatus.Location  = New-Object System.Drawing.Point(8, 46)
-$pnlStatus.Size      = New-Object System.Drawing.Size(350, 112)
+$pnlStatus.Location  = New-Object System.Drawing.Point(8, 56)
+$pnlStatus.Size      = New-Object System.Drawing.Size(1056, 144)
 $pnlStatus.BackColor = $cPanel
 $pnlStatus.BorderStyle = "FixedSingle"
 $split.Panel1.Controls.Add($pnlStatus)
 
-$lblStatusHead           = New-Label "STATUS" 8 6 200 $fUi
+$lblStatusHead           = New-Label "STATUS" 12 8 200 $fUi
 $lblStatusHead.ForeColor = $cDim
 $pnlStatus.Controls.Add($lblStatusHead)
 
-$lblMonitor = New-Label "Monitor : --" 8 26 334 $fMono
-$lblWorker  = New-Label "Worker  : --" 8 46 334 $fMono
-$lblCounts  = New-Label ""             8 66 334 $fMono
-$lblActive  = New-Label ""             8 88 334 $fMonoSm
+$lblMonitor = New-Label "Monitor : --" 12 32  1040 $fMono   28
+$lblWorker  = New-Label "Worker  : --" 12 60  1040 $fMono   28
+$lblCounts  = New-Label ""             12 88  1040 $fMono   28
+$lblActive  = New-Label ""             12 116 1040 $fMonoSm 24
 $lblActive.ForeColor = $cGreen
 foreach ($l in @($lblMonitor, $lblWorker, $lblCounts, $lblActive)) { $pnlStatus.Controls.Add($l) }
 
 # Queue label
-$lblQHead = New-Label "QUEUE" 12 170 60 $fUi
+$lblQHead = New-Label "QUEUE" 16 216 200 $fUi 24
 $lblQHead.ForeColor = $cDim
 $split.Panel1.Controls.Add($lblQHead)
 
-# Queue listbox
+# Queue listbox -- full width, taller rows for touch
 $lstQueue             = New-Object System.Windows.Forms.ListBox
-$lstQueue.Location    = New-Object System.Drawing.Point(8, 190)
-$lstQueue.Size        = New-Object System.Drawing.Size(352, 420)
+$lstQueue.Location    = New-Object System.Drawing.Point(8, 244)
+$lstQueue.Size        = New-Object System.Drawing.Size(1056, 360)
 $lstQueue.BackColor   = $cPanel
 $lstQueue.ForeColor   = $cText
 $lstQueue.BorderStyle = "FixedSingle"
-$lstQueue.Font        = $fMonoSm
+$lstQueue.Font        = $fMono
 $lstQueue.DrawMode    = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
-$lstQueue.ItemHeight  = 22
+$lstQueue.ItemHeight  = 32
 $split.Panel1.Controls.Add($lstQueue)
 
 $lstQueue.add_DrawItem({
@@ -132,7 +134,8 @@ $lstQueue.add_DrawItem({
     elseif ($item -match "^\[ERR\]")  { $col = $cRed    }
     else                              { $col = $cYellow }
     $brush = New-Object System.Drawing.SolidBrush($col)
-    $e.Graphics.DrawString($item, $e.Font, $brush, ($e.Bounds.X + 4), ($e.Bounds.Y + 3))
+    # Centre vertically in the taller row.
+    $e.Graphics.DrawString($item, $e.Font, $brush, ($e.Bounds.X + 6), ($e.Bounds.Y + 8))
     $brush.Dispose()
     $e.DrawFocusRectangle()
 })
@@ -153,20 +156,20 @@ $lstQueue.add_SelectedIndexChanged({
     Refresh-Transcript
 })
 
-# Buttons
-$btnMon = New-Btn "Run Monitor" 8   622 170 36 $cBtnMon
-$btnWrk = New-Btn "Run Worker"  190 622 170 36 $cBtnWrk
-$btnGh  = New-Btn "Open Issues" 8   664 352 30
+# Buttons -- big touch targets, two-up row then full-width Open Issues
+$btnMon = New-Btn "Run Monitor" 8   620 520 64 $cBtnMon
+$btnWrk = New-Btn "Run Worker"  544 620 520 64 $cBtnWrk
+$btnGh  = New-Btn "Open Issues" 8   692 1056 56
 foreach ($b in @($btnMon, $btnWrk, $btnGh)) { $split.Panel1.Controls.Add($b) }
 
-# Monitor interval picker (1-60 minutes)
-$lblIntCap = New-Label "Monitor interval:" 8 702 110 $fUi
+# Monitor interval picker (1-60 minutes) -- bottom of the top panel
+$lblIntCap = New-Label "Monitor interval:" 16 766 220 $fUi 28
 $lblIntCap.ForeColor = $cDim
 $split.Panel1.Controls.Add($lblIntCap)
 
 $numInterval = New-Object System.Windows.Forms.NumericUpDown
-$numInterval.Location  = New-Object System.Drawing.Point(125, 700)
-$numInterval.Size      = New-Object System.Drawing.Size(55, 22)
+$numInterval.Location  = New-Object System.Drawing.Point(244, 762)
+$numInterval.Size      = New-Object System.Drawing.Size(96, 32)
 $numInterval.Minimum   = 1
 $numInterval.Maximum   = 60
 $numInterval.Value     = [int]($script:MonitorIntervalSec / 60)
@@ -179,7 +182,7 @@ $numInterval.add_ValueChanged({
 })
 $split.Panel1.Controls.Add($numInterval)
 
-$lblIntUnit = New-Label "minutes" 187 702 60 $fUi
+$lblIntUnit = New-Label "minutes" 350 766 120 $fUi 28
 $lblIntUnit.ForeColor = $cDim
 $split.Panel1.Controls.Add($lblIntUnit)
 
@@ -219,18 +222,19 @@ $btnWrk.add_Click({
 
 $btnGh.add_Click({ Start-Process "https://github.com/tummyslyunopened/config/issues" })
 
-# ---- RIGHT PANEL ----
+# ---- BOTTOM PANEL (transcript) ----
 
 $lblTranscript          = New-Object System.Windows.Forms.Label
 $lblTranscript.Text     = "Log -- main.log"
 $lblTranscript.Font     = $fUi
 $lblTranscript.ForeColor = $cDim
-$lblTranscript.Location = New-Object System.Drawing.Point(10, 10)
-$lblTranscript.Size     = New-Object System.Drawing.Size(600, 20)
+$lblTranscript.Location = New-Object System.Drawing.Point(12, 12)
+$lblTranscript.Size     = New-Object System.Drawing.Size(800, 28)
 $split.Panel2.Controls.Add($lblTranscript)
 
-$btnShowLog = New-Btn "main.log" 0 4 80 22
-$btnShowLog.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+# Bigger touch target than the original 80x22 chip.
+$btnShowLog = New-Btn "main.log" 0 8 140 36
+$btnShowLog.Font = $fUi
 $btnShowLog.FlatAppearance.BorderSize = 0
 $split.Panel2.Controls.Add($btnShowLog)
 
@@ -244,17 +248,17 @@ $btnShowLog.add_Click({
 $rtb             = New-Object System.Windows.Forms.RichTextBox
 $rtb.BackColor   = [System.Drawing.Color]::FromArgb(16, 16, 16)
 $rtb.ForeColor   = $cText
-$rtb.Font        = $fMonoSm
+$rtb.Font        = $fMono
 $rtb.ReadOnly    = $true
 $rtb.BorderStyle = "None"
 $rtb.ScrollBars  = "Vertical"
 $rtb.WordWrap    = $false
-$rtb.Location    = New-Object System.Drawing.Point(0, 34)
+$rtb.Location    = New-Object System.Drawing.Point(0, 50)
 $split.Panel2.Controls.Add($rtb)
 
 $split.Panel2.add_Resize({
-    $rtb.Size = New-Object System.Drawing.Size($split.Panel2.Width, ($split.Panel2.Height - 34))
-    $btnShowLog.Location = New-Object System.Drawing.Point(($split.Panel2.Width - 88), 4)
+    $rtb.Size = New-Object System.Drawing.Size($split.Panel2.Width, ($split.Panel2.Height - 50))
+    $btnShowLog.Location = New-Object System.Drawing.Point(($split.Panel2.Width - 152), 8)
 })
 
 # ---- Refresh logic ----
