@@ -43,7 +43,7 @@ foreach ($R in $Repos) {
 
     # Open issues
     try {
-        $issues = @(gh issue list --repo $R.repo --state open --json number,title,body,assignees,author 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null })
+        [array]$issues = gh issue list --repo $R.repo --state open --json number,title,body,assignees,author 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null }
         Write-Log "[$slug] issues: $($issues.Count) open"
         foreach ($issue in $issues) {
             if (-not $issue.number) { Write-Log "[$slug] skipping phantom issue (empty number/author)" "WARN"; continue }
@@ -53,7 +53,7 @@ foreach ($R in $Repos) {
             if ($issue.assignees.Count -gt 0) { Write-Log "[$slug] issue #$($issue.number) skipped - already assigned"; continue }
             $id = "issue-$slug-$($issue.number)"
             if ($id -in $ExistingIds) { Write-Log "[$slug] $id already in queue (status=$(($Queue | Where-Object {$_.id -eq $id}).status))"; continue }
-            $existingPR = @(gh pr list --repo $R.repo --search "closes #$($issue.number) in:body" --json number 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null })
+            [array]$existingPR = gh pr list --repo $R.repo --search "closes #$($issue.number) in:body" --json number 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null }
             if ($existingPR.Count -gt 0) { Write-Log "[$slug] issue #$($issue.number) skipped - PR exists"; continue }
 
             $Queue += [PSCustomObject]@{
@@ -70,7 +70,7 @@ foreach ($R in $Repos) {
     try {
         $apiUrl  = "repos/$($R.repo)/issues/comments"
         $params  = "sort=created&direction=desc&per_page=50"
-        $comments = @(gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null })
+        [array]$comments = gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null }
         $recent  = @($comments | Where-Object { $_.created_at -gt $Since })
         Write-Log "[$slug] issue comments: $($comments.Count) total, $($recent.Count) since $Since"
         foreach ($c in $recent) {
@@ -94,7 +94,7 @@ foreach ($R in $Repos) {
     try {
         $apiUrl     = "repos/$($R.repo)/pulls/comments"
         $params     = "sort=created&direction=desc&per_page=50"
-        $prComments = @(gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null })
+        [array]$prComments = gh api "${apiUrl}?${params}" 2>$null | ConvertFrom-Json | Where-Object { $_ -ne $null }
         $recent     = @($prComments | Where-Object { $_.created_at -gt $Since })
         Write-Log "[$slug] PR review comments: $($prComments.Count) total, $($recent.Count) since $Since"
         foreach ($c in $recent) {
