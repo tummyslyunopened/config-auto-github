@@ -119,26 +119,21 @@ $Guidelines
     $header = "# $($Next.id) | $($Next.type) | $($Next.repo) #$($Next.number) | started $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))`n# -------------------------------------------------------`n`n"
     [System.IO.File]::WriteAllText($TranscriptFile, $header, [System.Text.UTF8Encoding]::new($false))
 
-    # Write prompt and a runner script to temp files -- avoids quoting issues on the command line
+    # Write prompt to a temp file (avoids command-line quoting issues) and call the
+    # static claude-runner.ps1 which streams stream-json events live to the transcript.
     $promptFile = "$env:TEMP\cag-prompt-$($Next.id).txt"
-    $runnerFile = "$env:TEMP\cag-runner-$($Next.id).ps1"
     [System.IO.File]::WriteAllText($promptFile, $Prompt, [System.Text.UTF8Encoding]::new($false))
 
-    $escapedExe        = $ClaudeExe.Replace("'", "''")
-    $escapedPromptFile = $promptFile.Replace("'", "''")
-    $escapedTranscript = $TranscriptFile.Replace("'", "''")
-    $runnerScript = @"
-Set-Location '$($RepoRoot.Replace("'","''"))'
-`$env:GIT_TERMINAL_PROMPT = '0'
-`$env:GIT_EDITOR          = 'true'
-`$env:GH_PROMPT_DISABLED  = '1'
-`$p = [System.IO.File]::ReadAllText('$escapedPromptFile')
-& '$escapedExe' --print --dangerously-skip-permissions `$p 2>&1 | Tee-Object -FilePath '$escapedTranscript' -Append
-"@
-    [System.IO.File]::WriteAllText($runnerFile, $runnerScript, [System.Text.UTF8Encoding]::new($false))
-
+    $runnerScript = "$ScriptDir\claude-runner.ps1"
+    $runnerArgs = @(
+        "-NonInteractive", "-NoProfile", "-File", "`"$runnerScript`"",
+        "-ClaudeExe",      "`"$ClaudeExe`"",
+        "-PromptFile",     "`"$promptFile`"",
+        "-TranscriptFile", "`"$TranscriptFile`"",
+        "-RepoRoot",       "`"$RepoRoot`""
+    )
     $proc = Start-Process "powershell.exe" `
-        -ArgumentList "-NonInteractive -NoProfile -File `"$runnerFile`"" `
+        -ArgumentList ($runnerArgs -join " ") `
         -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
 
     $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
@@ -158,7 +153,6 @@ Set-Location '$($RepoRoot.Replace("'","''"))'
         Send-Toast "claude TIMEOUT" "$($Next.id) killed after ${TimeoutSeconds}s"
     }
 
-    Remove-Item $runnerFile -ErrorAction SilentlyContinue
     Remove-Item $promptFile -ErrorAction SilentlyContinue
 
     $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
