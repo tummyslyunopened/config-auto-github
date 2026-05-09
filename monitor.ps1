@@ -3,6 +3,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $QueueFile = "$ScriptDir\queue.json"
 
+# Only activity from these GitHub usernames will ever be queued.
+# Add collaborators here if you want to grant them bot access.
+$AllowedAuthors = @(
+    "tummyslyunopened"
+)
+
 $Repos = @(
     [PSCustomObject]@{ repo = "tummyslyunopened/config";              path = "." },
     [PSCustomObject]@{ repo = "tummyslyunopened/config-manager";      path = "config-manager" },
@@ -15,21 +21,29 @@ $Repos = @(
     [PSCustomObject]@{ repo = "tummyslyunopened/config-auto-github";  path = "config-auto-github" }
 )
 
+function Test-AllowedAuthor {
+    param([string]$Login)
+    if ($Login -in $AllowedAuthors) { return $true }
+    Write-Log "SKIPPED — author '$Login' not in allowlist" "WARN"
+    return $false
+}
+
 $Queue = if (Test-Path $QueueFile) { @(Get-Content $QueueFile -Raw | ConvertFrom-Json) } else { @() }
 $ExistingIds = @($Queue | ForEach-Object { $_.id })
 
 $Since = (Get-Date).ToUniversalTime().AddMinutes(-7).ToString("yyyy-MM-ddTHH:mm:ssZ")
 $Added = 0
 
-Write-Log "Monitor run started. Checking ${$Repos.Count} repos since $Since."
+Write-Log "Monitor run started. Checking $($Repos.Count) repos since $Since. Allowlist: $($AllowedAuthors -join ', ')."
 
 foreach ($R in $Repos) {
     $slug = $R.repo.Split("/")[1]
 
-    # Open issues with no assignee and no existing PR
+    # Open issues — author field required to enforce allowlist
     try {
-        $issues = @(gh issue list --repo $R.repo --state open --json number,title,body,assignees 2>$null | ConvertFrom-Json)
+        $issues = @(gh issue list --repo $R.repo --state open --json number,title,body,assignees,author 2>$null | ConvertFrom-Json)
         foreach ($issue in $issues) {
+            if (-not (Test-AllowedAuthor $issue.author.login)) { continue }
             if ($issue.assignees.Count -gt 0) { continue }
             $id = "issue-$slug-$($issue.number)"
             if ($id -in $ExistingIds) { continue }
@@ -39,19 +53,21 @@ foreach ($R in $Repos) {
             $Queue += [PSCustomObject]@{
                 id = $id; type = "new_issue"; repo = $R.repo; repoPath = $R.path
                 number = $issue.number; title = $issue.title; body = $issue.body
+                author = $issue.author.login
                 addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
             $ExistingIds += $id
             $Added++
-            Write-Log "Queued new_issue: $id — $($issue.title)"
+            Write-Log "Queued new_issue: $id — '$($issue.title)' by $($issue.author.login)"
         }
     } catch { Write-Log "Error fetching issues for $($R.repo): $_" "WARN" }
 
-    # Recent issue comments
+    # Issue comments
     try {
         $comments = @(gh api "repos/$($R.repo)/issues/comments?sort=created&direction=desc&per_page=50" 2>$null | ConvertFrom-Json)
         foreach ($c in $comments) {
             if ($c.created_at -le $Since) { continue }
+            if (-not (Test-AllowedAuthor $c.user.login)) { continue }
             $id = "comment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $issueNum = [int]($c.issue_url -replace ".*/")
@@ -67,23 +83,24 @@ foreach ($R in $Repos) {
         }
     } catch { Write-Log "Error fetching issue comments for $($R.repo): $_" "WARN" }
 
-    # Recent PR review comments
+    # PR review comments
     try {
         $prComments = @(gh api "repos/$($R.repo)/pulls/comments?sort=created&direction=desc&per_page=50" 2>$null | ConvertFrom-Json)
         foreach ($c in $prComments) {
             if ($c.created_at -le $Since) { continue }
+            if (-not (Test-AllowedAuthor $c.user.login)) { continue }
             $id = "prcomment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $prNum = [int]($c.pull_request_url -replace ".*/")
 
             $Queue += [PSCustomObject]@{
                 id = $id; type = "pr_review_comment"; repo = $R.repo; repoPath = $R.path
-                number = $prNum; body = $c.body; filePath = $c.path
+                number = $prNum; author = $c.user.login; body = $c.body; filePath = $c.path
                 addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
             $ExistingIds += $id
             $Added++
-            Write-Log "Queued pr_review_comment: $id — PR #$prNum in $($R.repo)"
+            Write-Log "Queued pr_review_comment: $id — by $($c.user.login) on PR #$prNum"
         }
     } catch { Write-Log "Error fetching PR comments for $($R.repo): $_" "WARN" }
 }
