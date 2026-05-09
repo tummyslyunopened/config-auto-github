@@ -34,7 +34,7 @@ $script:QueueIds               = @()
 $script:SelectedTranscriptFile = ""
 $script:LastTranscriptLen      = 0
 
-$MonitorIntervalSec = 300  # auto-rerun monitor every 5 minutes when toggled on
+$script:MonitorIntervalSec = 300  # auto-rerun monitor; updated live by the interval picker
 
 # Form
 $form               = New-Object System.Windows.Forms.Form
@@ -158,6 +158,30 @@ $btnMon = New-Btn "Run Monitor" 8   622 170 36 $cBtnMon
 $btnWrk = New-Btn "Run Worker"  190 622 170 36 $cBtnWrk
 $btnGh  = New-Btn "Open Issues" 8   664 352 30
 foreach ($b in @($btnMon, $btnWrk, $btnGh)) { $split.Panel1.Controls.Add($b) }
+
+# Monitor interval picker (1-60 minutes)
+$lblIntCap = New-Label "Monitor interval:" 8 702 110 $fUi
+$lblIntCap.ForeColor = $cDim
+$split.Panel1.Controls.Add($lblIntCap)
+
+$numInterval = New-Object System.Windows.Forms.NumericUpDown
+$numInterval.Location  = New-Object System.Drawing.Point(125, 700)
+$numInterval.Size      = New-Object System.Drawing.Size(55, 22)
+$numInterval.Minimum   = 1
+$numInterval.Maximum   = 60
+$numInterval.Value     = [int]($script:MonitorIntervalSec / 60)
+$numInterval.BackColor = $cPanel
+$numInterval.ForeColor = $cText
+$numInterval.BorderStyle = "FixedSingle"
+$numInterval.Font      = $fMono
+$numInterval.add_ValueChanged({
+    $script:MonitorIntervalSec = [int]$numInterval.Value * 60
+})
+$split.Panel1.Controls.Add($numInterval)
+
+$lblIntUnit = New-Label "minutes" 187 702 60 $fUi
+$lblIntUnit.ForeColor = $cDim
+$split.Panel1.Controls.Add($lblIntUnit)
 
 function Start-MonitorRun {
     $script:LastMonitorStart = Get-Date
@@ -292,8 +316,8 @@ function Refresh-Status {
 
     # Auto-rerun monitor on interval when toggled on
     if ($script:MonitorAutoRun -and -not $script:MonitorProc) {
-        $elapsed = if ($script:LastMonitorStart) { ((Get-Date) - $script:LastMonitorStart).TotalSeconds } else { $MonitorIntervalSec + 1 }
-        if ($elapsed -ge $MonitorIntervalSec) { Start-MonitorRun }
+        $elapsed = if ($script:LastMonitorStart) { ((Get-Date) - $script:LastMonitorStart).TotalSeconds } else { $script:MonitorIntervalSec + 1 }
+        if ($elapsed -ge $script:MonitorIntervalSec) { Start-MonitorRun }
     }
 
     # Auto-restart worker whenever there is pending work
@@ -309,10 +333,11 @@ function Refresh-Status {
             $btnMon.Text = "Stop Monitor (running)"
         } else {
             $secsLeft = if ($script:LastMonitorStart) {
-                [int]($MonitorIntervalSec - ((Get-Date) - $script:LastMonitorStart).TotalSeconds)
+                [int]($script:MonitorIntervalSec - ((Get-Date) - $script:LastMonitorStart).TotalSeconds)
             } else { 0 }
             if ($secsLeft -lt 0) { $secsLeft = 0 }
-            $btnMon.Text = "Stop Monitor (next ${secsLeft}s)"
+            $countdown = if ($secsLeft -ge 60) { "{0}m {1:D2}s" -f [int]($secsLeft/60), ($secsLeft%60) } else { "${secsLeft}s" }
+            $btnMon.Text = "Stop Monitor (next $countdown)"
         }
     } else {
         $btnMon.BackColor = $cBtnMon
