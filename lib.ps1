@@ -8,6 +8,9 @@ function Write-Log {
     Write-Host $line
     $null = New-Item -ItemType Directory -Force -Path "$ScriptDir\logs"
     Add-Content -Path $LogFile -Value $line -Encoding utf8
+    if ($script:LogSource) {
+        Add-Content -Path "$ScriptDir\logs\$($script:LogSource).log" -Value $line -Encoding utf8
+    }
 }
 
 function Send-Toast {

@@ -1,6 +1,13 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$ScriptDir\lib.ps1"
 
+$script:LogSource = "monitor"
+
+# Write a PID file so config-auto-github-remote-view can detect us. Cleanup
+# is best-effort; the viewer falls back to psutil to spot stale PIDs.
+$PidFile = "$ScriptDir\monitor.pid"
+[System.IO.File]::WriteAllText($PidFile, [string]$PID)
+
 $QueueFile = "$ScriptDir\queue.json"
 
 # Only activity from these GitHub usernames will ever be queued.
@@ -128,3 +135,5 @@ if ($pendingCount -gt 0) {
         Write-Log "Monitor: started worker task."
     }
 }
+
+Remove-Item $PidFile -ErrorAction SilentlyContinue

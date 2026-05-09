@@ -5,6 +5,13 @@ $Guidelines = if (Test-Path "$ScriptDir\guidelines.md") { Get-Content "$ScriptDi
 
 . "$ScriptDir\lib.ps1"
 
+$script:LogSource = "worker"
+
+# Write a PID file so config-auto-github-remote-view can detect us. Cleanup
+# is best-effort; the viewer falls back to psutil to spot stale PIDs.
+$PidFile = "$ScriptDir\worker.pid"
+[System.IO.File]::WriteAllText($PidFile, [string]$PID)
+
 # Prevent git, gh, and ssh from blocking on interactive prompts
 $env:GIT_TERMINAL_PROMPT  = "0"
 $env:GIT_EDITOR           = "true"
@@ -174,5 +181,6 @@ $Guidelines
     }
 }
 
+Remove-Item $PidFile -ErrorAction SilentlyContinue
 Write-Log "Worker: queue empty, exiting."
 Send-Toast "config-auto-github idle" "Queue empty -- waiting for next monitor run."

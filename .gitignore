@@ -1,2 +1,4 @@
 queue.json
 logs/
+monitor.pid
+worker.pid
