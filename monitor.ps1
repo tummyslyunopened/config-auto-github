@@ -1,4 +1,4 @@
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+﻿$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$ScriptDir\lib.ps1"
 
 $QueueFile = "$ScriptDir\queue.json"
@@ -17,14 +17,14 @@ $Repos = @(
     [PSCustomObject]@{ repo = "tummyslyunopened/wallpapers";          path = "wallpapers" },
     [PSCustomObject]@{ repo = "tummyslyunopened/images";              path = "images" },
     [PSCustomObject]@{ repo = "tummyslyunopened/config-itam";         path = "config-itam" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-itsm";         path = "config-itsm" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-auto-github";  path = "config-auto-github" }
+    [PSCustomObject]@{ repo = "tummyslyunopened/config-itsm";         path = "config-itsm" }
 )
+# config-auto-github is intentionally excluded -- the bot must not modify its own scripts.
 
 function Test-AllowedAuthor {
     param([string]$Login)
     if ($Login -in $AllowedAuthors) { return $true }
-    Write-Log "SKIPPED — author '$Login' not in allowlist" "WARN"
+    Write-Log "SKIPPED â€” author '$Login' not in allowlist" "WARN"
     return $false
 }
 
@@ -39,7 +39,7 @@ Write-Log "Monitor run started. Checking $($Repos.Count) repos since $Since. All
 foreach ($R in $Repos) {
     $slug = $R.repo.Split("/")[1]
 
-    # Open issues — author field required to enforce allowlist
+    # Open issues â€” author field required to enforce allowlist
     try {
         $issues = @(gh issue list --repo $R.repo --state open --json number,title,body,assignees,author 2>$null | ConvertFrom-Json)
         foreach ($issue in $issues) {
@@ -58,7 +58,7 @@ foreach ($R in $Repos) {
             }
             $ExistingIds += $id
             $Added++
-            Write-Log "Queued new_issue: $id — '$($issue.title)' by $($issue.author.login)"
+            Write-Log "Queued new_issue: $id â€” '$($issue.title)' by $($issue.author.login)"
         }
     } catch { Write-Log "Error fetching issues for $($R.repo): $_" "WARN" }
 
@@ -79,7 +79,7 @@ foreach ($R in $Repos) {
             }
             $ExistingIds += $id
             $Added++
-            Write-Log "Queued issue_comment: $id — by $($c.user.login) on #$issueNum"
+            Write-Log "Queued issue_comment: $id â€” by $($c.user.login) on #$issueNum"
         }
     } catch { Write-Log "Error fetching issue comments for $($R.repo): $_" "WARN" }
 
@@ -100,7 +100,7 @@ foreach ($R in $Repos) {
             }
             $ExistingIds += $id
             $Added++
-            Write-Log "Queued pr_review_comment: $id — by $($c.user.login) on PR #$prNum"
+            Write-Log "Queued pr_review_comment: $id â€” by $($c.user.login) on PR #$prNum"
         }
     } catch { Write-Log "Error fetching PR comments for $($R.repo): $_" "WARN" }
 }
