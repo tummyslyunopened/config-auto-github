@@ -6,13 +6,21 @@ $Guidelines = if (Test-Path "$ScriptDir\guidelines.md") { Get-Content "$ScriptDi
 . "$ScriptDir\lib.ps1"
 
 # Prevent git, gh, and ssh from blocking on interactive prompts
-$env:GIT_TERMINAL_PROMPT  = "0"   # git: never ask for credentials
-$env:GIT_EDITOR           = "true" # git: no-op editor so commit/rebase never open vim
-$env:GH_PROMPT_DISABLED   = "1"   # gh: disable interactive prompts
-$env:SSH_ASKPASS          = ""     # suppress SSH passphrase GUI
-$env:GCM_INTERACTIVE      = "never" # git credential manager: non-interactive
+$env:GIT_TERMINAL_PROMPT  = "0"
+$env:GIT_EDITOR           = "true"
+$env:GH_PROMPT_DISABLED   = "1"
+$env:SSH_ASKPASS          = ""
+$env:GCM_INTERACTIVE      = "never"
 
-$TimeoutSeconds = 1800  # hard kill per item after 30 minutes
+# Resolve claude executable - may not be in PATH when launched from GUI
+$ClaudeExe = "C:\Users\remote\.local\bin\claude.exe"
+if (-not (Test-Path $ClaudeExe)) {
+    $found = Get-Command claude -ErrorAction SilentlyContinue
+    if ($found) { $ClaudeExe = $found.Source }
+}
+Write-Log "Claude exe: $ClaudeExe (exists: $(Test-Path $ClaudeExe))"
+
+$TimeoutSeconds = 1800
 
 Set-Location $RepoRoot
 Write-Log "Worker started. Syncing submodules..."
@@ -21,22 +29,22 @@ git submodule update --init --recursive 2>$null
 while ($true) {
     if (-not (Test-Path $QueueFile)) { break }
 
-    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json)
+    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null })
     $Next = $Queue | Where-Object { $_.status -eq "pending" } | Select-Object -First 1
     if (-not $Next) { break }
 
-    # Mark in-progress with start time
     $startTime = Get-Date
     $TranscriptFile = "$ScriptDir\logs\$($Next.id).log"
+
     $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
         $_.status = "in_progress"
-        $_.startedAt = $startTime.ToString("o")
-        $_.transcript = $TranscriptFile
+        $_ | Add-Member -NotePropertyName "startedAt"  -NotePropertyValue $startTime.ToString("o") -Force
+        $_ | Add-Member -NotePropertyName "transcript" -NotePropertyValue $TranscriptFile -Force
     }
     $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
 
-    Write-Log "Starting: $($Next.id) [$($Next.type)] — $($Next.repo)#$($Next.number)"
-    Send-Toast "Working on $($Next.type)" "$($Next.repo) #$($Next.number) — transcript: logs\$($Next.id).log"
+    Write-Log "Starting: $($Next.id) [$($Next.type)] -- $($Next.repo)#$($Next.number)"
+    Send-Toast "Working on $($Next.type)" "$($Next.repo) #$($Next.number)"
 
     $pathNote      = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
     $cdStep        = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
@@ -75,11 +83,11 @@ Comment by $($Next.author):
 $($Next.body)
 
 Steps:
-1. gh issue view $($Next.number) --repo $($Next.repo) --comments   # read full thread first
+1. gh issue view $($Next.number) --repo $($Next.repo) --comments
 2. Determine what is needed:
-   - Question          -> gh issue comment $($Next.number) --repo $($Next.repo) --body "..."
-   - Instruction       -> $cdStep, implement change, open/update PR, reply confirming
-   - "close this" etc  -> gh issue close $($Next.number) --repo $($Next.repo)
+   - Question     -> gh issue comment $($Next.number) --repo $($Next.repo) --body "..."
+   - Instruction  -> $cdStep, implement change, open/update PR, reply confirming
+   - Close request -> gh issue close $($Next.number) --repo $($Next.repo)
 $submoduleStep
 
 $Guidelines
@@ -94,10 +102,10 @@ Review comment on $($Next.filePath):
 $($Next.body)
 
 Steps:
-1. gh pr view $($Next.number) --repo $($Next.repo) --comments   # read all feedback
+1. gh pr view $($Next.number) --repo $($Next.repo) --comments
 2. $cdStep
 3. git fetch origin && git checkout <headRefName>
-4. Implement all review feedback carefully
+4. Implement all review feedback
 5. Stage explicitly, commit, push
 6. gh pr comment $($Next.number) --repo $($Next.repo) --body "Addressed: <summary>"
 $submoduleStep
@@ -107,67 +115,70 @@ $Guidelines
         }
     }
 
-    # Run claude, capture full transcript to log file
     $null = New-Item -ItemType Directory -Force -Path "$ScriptDir\logs"
-    $header = @"
-# Transcript: $($Next.id)
-# Type:       $($Next.type)
-# Repo:       $($Next.repo) #$($Next.number)
-# Started:    $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))
-# Timeout:    ${TimeoutSeconds}s
-# -------------------------------------------------------
+    $header = "# $($Next.id) | $($Next.type) | $($Next.repo) #$($Next.number) | started $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))`n# -------------------------------------------------------`n`n"
+    [System.IO.File]::WriteAllText($TranscriptFile, $header, [System.Text.UTF8Encoding]::new($false))
 
+    # Write prompt and a runner script to temp files -- avoids quoting issues on the command line
+    $promptFile = "$env:TEMP\cag-prompt-$($Next.id).txt"
+    $runnerFile = "$env:TEMP\cag-runner-$($Next.id).ps1"
+    [System.IO.File]::WriteAllText($promptFile, $Prompt, [System.Text.UTF8Encoding]::new($false))
+
+    $escapedExe        = $ClaudeExe.Replace("'", "''")
+    $escapedPromptFile = $promptFile.Replace("'", "''")
+    $escapedTranscript = $TranscriptFile.Replace("'", "''")
+    $runnerScript = @"
+Set-Location '$($RepoRoot.Replace("'","''"))'
+`$env:GIT_TERMINAL_PROMPT = '0'
+`$env:GIT_EDITOR          = 'true'
+`$env:GH_PROMPT_DISABLED  = '1'
+`$p = [System.IO.File]::ReadAllText('$escapedPromptFile')
+& '$escapedExe' --print --dangerously-skip-permissions `$p 2>&1 | Tee-Object -FilePath '$escapedTranscript' -Append
 "@
-    Set-Content $TranscriptFile -Value $header -Encoding utf8
+    [System.IO.File]::WriteAllText($runnerFile, $runnerScript, [System.Text.UTF8Encoding]::new($false))
 
-    # Run in a background job so we can enforce a hard timeout
-    $job = Start-Job -ScriptBlock {
-        param($prompt, $transcriptFile)
-        $env:GIT_TERMINAL_PROMPT = "0"
-        $env:GIT_EDITOR          = "true"
-        $env:GH_PROMPT_DISABLED  = "1"
-        claude --print --dangerously-skip-permissions $prompt 2>&1
-    } -ArgumentList $Prompt, $TranscriptFile
+    $proc = Start-Process "powershell.exe" `
+        -ArgumentList "-NonInteractive -NoProfile -File `"$runnerFile`"" `
+        -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
 
-    $completed = Wait-Job $job -Timeout $TimeoutSeconds
+    $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
 
-    if ($completed) {
-        Receive-Job $job | Tee-Object -FilePath $TranscriptFile -Append
-        $exitStatus = if ($job.State -eq "Failed") { "error" } else { "done" }
-        if ($job.State -eq "Failed") {
-            $err = $job.ChildJobs[0].JobStateInfo.Reason.Message
-            Write-Log "Job failed for $($Next.id): $err" "ERROR"
-            Add-Content $TranscriptFile -Value "`n[JOB FAILED] $err" -Encoding utf8
+    if ($finished) {
+        $exitStatus = if ($proc.ExitCode -eq 0) { "done" } else { "error" }
+        if ($exitStatus -eq "error") {
+            Write-Log "claude exited with code $($proc.ExitCode) for $($Next.id)" "ERROR"
+            Add-Content $TranscriptFile -Value "`n[EXIT CODE $($proc.ExitCode)]" -Encoding utf8
         }
     } else {
-        Stop-Job $job
+        $proc | Stop-Process -Force -ErrorAction SilentlyContinue
         $exitStatus = "timeout"
-        $msg = "Timed out after ${TimeoutSeconds}s — killed."
+        $msg = "Timed out after ${TimeoutSeconds}s -- killed."
         Write-Log $msg "ERROR"
         Add-Content $TranscriptFile -Value "`n[TIMEOUT] $msg" -Encoding utf8
         Send-Toast "claude TIMEOUT" "$($Next.id) killed after ${TimeoutSeconds}s"
     }
-    Remove-Job $job -Force
+
+    Remove-Item $runnerFile -ErrorAction SilentlyContinue
+    Remove-Item $promptFile -ErrorAction SilentlyContinue
 
     $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
 
-    # Mark done/error (re-read in case monitor wrote to file while we ran)
-    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json)
+    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null })
     $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
         $_.status = $exitStatus
-        $_.completedAt = (Get-Date -Format "o")
-        $_.elapsedSec = $elapsed
+        $_ | Add-Member -NotePropertyName "completedAt" -NotePropertyValue (Get-Date -Format "o") -Force
+        $_ | Add-Member -NotePropertyName "elapsedSec"  -NotePropertyValue $elapsed -Force
     }
     $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
 
     $pendingLeft = @($Queue | Where-Object { $_.status -eq "pending" }).Count
-    Write-Log "$exitStatus $($Next.id) in ${elapsed}s. $pendingLeft item(s) remaining."
+    Write-Log "$exitStatus $($Next.id) in ${elapsed}s. $pendingLeft remaining."
     if ($exitStatus -eq "done") {
-        Send-Toast "claude done: $($Next.type)" "$($Next.repo) #$($Next.number) — ${elapsed}s. $pendingLeft left."
+        Send-Toast "claude done" "$($Next.repo) #$($Next.number) -- ${elapsed}s. $pendingLeft left."
     } elseif ($exitStatus -eq "error") {
-        Send-Toast "claude ERROR: $($Next.id)" "Check logs\$($Next.id).log"
+        Send-Toast "claude ERROR" "$($Next.id) -- check logs\$($Next.id).log"
     }
 }
 
 Write-Log "Worker: queue empty, exiting."
-Send-Toast "config-auto-github idle" "Queue empty — waiting for next monitor run."
+Send-Toast "config-auto-github idle" "Queue empty -- waiting for next monitor run."
