@@ -1,4 +1,6 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. "$ScriptDir\lib.ps1"
+
 $QueueFile = "$ScriptDir\queue.json"
 
 $Repos = @(
@@ -19,6 +21,8 @@ $ExistingIds = @($Queue | ForEach-Object { $_.id })
 $Since = (Get-Date).ToUniversalTime().AddMinutes(-7).ToString("yyyy-MM-ddTHH:mm:ssZ")
 $Added = 0
 
+Write-Log "Monitor run started. Checking ${$Repos.Count} repos since $Since."
+
 foreach ($R in $Repos) {
     $slug = $R.repo.Split("/")[1]
 
@@ -35,12 +39,13 @@ foreach ($R in $Repos) {
             $Queue += [PSCustomObject]@{
                 id = $id; type = "new_issue"; repo = $R.repo; repoPath = $R.path
                 number = $issue.number; title = $issue.title; body = $issue.body
-                addedAt = (Get-Date -Format "o"); status = "pending"
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
             $ExistingIds += $id
             $Added++
+            Write-Log "Queued new_issue: $id — $($issue.title)"
         }
-    } catch {}
+    } catch { Write-Log "Error fetching issues for $($R.repo): $_" "WARN" }
 
     # Recent issue comments
     try {
@@ -54,12 +59,13 @@ foreach ($R in $Repos) {
             $Queue += [PSCustomObject]@{
                 id = $id; type = "issue_comment"; repo = $R.repo; repoPath = $R.path
                 number = $issueNum; author = $c.user.login; body = $c.body; url = $c.html_url
-                addedAt = (Get-Date -Format "o"); status = "pending"
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
             $ExistingIds += $id
             $Added++
+            Write-Log "Queued issue_comment: $id — by $($c.user.login) on #$issueNum"
         }
-    } catch {}
+    } catch { Write-Log "Error fetching issue comments for $($R.repo): $_" "WARN" }
 
     # Recent PR review comments
     try {
@@ -73,23 +79,29 @@ foreach ($R in $Repos) {
             $Queue += [PSCustomObject]@{
                 id = $id; type = "pr_review_comment"; repo = $R.repo; repoPath = $R.path
                 number = $prNum; body = $c.body; filePath = $c.path
-                addedAt = (Get-Date -Format "o"); status = "pending"
+                addedAt = (Get-Date -Format "o"); status = "pending"; transcript = ""
             }
             $ExistingIds += $id
             $Added++
+            Write-Log "Queued pr_review_comment: $id — PR #$prNum in $($R.repo)"
         }
-    } catch {}
+    } catch { Write-Log "Error fetching PR comments for $($R.repo): $_" "WARN" }
 }
 
 $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
-Write-Host "Monitor: +$Added item(s). Pending: $(@($Queue | Where-Object { $_.status -eq 'pending' }).Count). Total: $($Queue.Count)."
+
+$pendingCount = @($Queue | Where-Object { $_.status -eq "pending" }).Count
+Write-Log "Monitor done. +$Added queued. Pending: $pendingCount. Total: $($Queue.Count)."
+
+if ($Added -gt 0) {
+    Send-Toast "config-auto-github" "$Added new item(s) queued. $pendingCount pending."
+}
 
 # Start worker if there are pending items and it is not already running
-$pending = @($Queue | Where-Object { $_.status -eq "pending" })
-if ($pending.Count -gt 0) {
+if ($pendingCount -gt 0) {
     $task = Get-ScheduledTask -TaskName "config-auto-github-worker" -ErrorAction SilentlyContinue
     if ($task -and $task.State -ne "Running") {
         Start-ScheduledTask -TaskName "config-auto-github-worker"
-        Write-Host "Monitor: started worker."
+        Write-Log "Monitor: started worker task."
     }
 }

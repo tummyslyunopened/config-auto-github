@@ -3,7 +3,10 @@ $RepoRoot = Split-Path -Parent $ScriptDir
 $QueueFile = "$ScriptDir\queue.json"
 $Guidelines = if (Test-Path "$ScriptDir\guidelines.md") { Get-Content "$ScriptDir\guidelines.md" -Raw } else { "" }
 
+. "$ScriptDir\lib.ps1"
+
 Set-Location $RepoRoot
+Write-Log "Worker started. Syncing submodules..."
 git submodule update --init --recursive 2>$null
 
 while ($true) {
@@ -13,13 +16,21 @@ while ($true) {
     $Next = $Queue | Where-Object { $_.status -eq "pending" } | Select-Object -First 1
     if (-not $Next) { break }
 
-    # Mark in-progress
-    $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object { $_.status = "in_progress" }
+    # Mark in-progress with start time
+    $startTime = Get-Date
+    $TranscriptFile = "$ScriptDir\logs\$($Next.id).log"
+    $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
+        $_.status = "in_progress"
+        $_.startedAt = $startTime.ToString("o")
+        $_.transcript = $TranscriptFile
+    }
     $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
-    Write-Host "Worker: starting $($Next.id)"
 
-    $pathNote     = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
-    $cdStep       = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
+    Write-Log "Starting: $($Next.id) [$($Next.type)] — $($Next.repo)#$($Next.number)"
+    Send-Toast "Working on $($Next.type)" "$($Next.repo) #$($Next.number) — transcript: logs\$($Next.id).log"
+
+    $pathNote      = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
+    $cdStep        = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
     $submoduleStep = if ($Next.repoPath -ne ".") {
         "cd $RepoRoot && git add $($Next.repoPath) && git commit -m 'chore: update $($Next.repoPath) submodule' && git push"
     } else { "" }
@@ -87,13 +98,41 @@ $Guidelines
         }
     }
 
-    claude --print --dangerously-skip-permissions $Prompt
+    # Run claude, capture full transcript to log file
+    $null = New-Item -ItemType Directory -Force -Path "$ScriptDir\logs"
+    try {
+        $header = @"
+# Transcript: $($Next.id)
+# Type:       $($Next.type)
+# Repo:       $($Next.repo) #$($Next.number)
+# Started:    $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))
+# -------------------------------------------------------
 
-    # Mark done (re-read in case monitor modified the file while we ran)
+"@
+        Set-Content $TranscriptFile -Value $header -Encoding utf8
+        claude --print --dangerously-skip-permissions $Prompt 2>&1 | Tee-Object -FilePath $TranscriptFile -Append
+        $exitStatus = "done"
+    } catch {
+        Write-Log "ERROR running claude for $($Next.id): $_" "ERROR"
+        Add-Content $TranscriptFile -Value "`n[ERROR] $_" -Encoding utf8
+        $exitStatus = "error"
+    }
+
+    $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
+
+    # Mark done/error (re-read in case monitor wrote to file while we ran)
     $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json)
-    $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object { $_.status = "done" }
+    $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
+        $_.status = $exitStatus
+        $_.completedAt = (Get-Date -Format "o")
+        $_.elapsedSec = $elapsed
+    }
     $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
-    Write-Host "Worker: done $($Next.id)"
+
+    $pendingLeft = @($Queue | Where-Object { $_.status -eq "pending" }).Count
+    Write-Log "$exitStatus $($Next.id) in ${elapsed}s. $pendingLeft item(s) remaining."
+    Send-Toast "claude finished: $($Next.type)" "$($Next.repo) #$($Next.number) — ${elapsed}s. $pendingLeft left."
 }
 
-Write-Host "Worker: queue empty, exiting."
+Write-Log "Worker: queue empty, exiting."
+Send-Toast "config-auto-github idle" "Queue empty — waiting for next monitor run."
