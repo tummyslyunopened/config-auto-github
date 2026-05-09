@@ -29,7 +29,7 @@ git submodule update --init --recursive 2>$null
 while ($true) {
     if (-not (Test-Path $QueueFile)) { break }
 
-    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null })
+    [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null }
     $Next = $Queue | Where-Object { $_.status -eq "pending" } | Select-Object -First 1
     if (-not $Next) { break }
 
@@ -41,7 +41,7 @@ while ($true) {
         $_ | Add-Member -NotePropertyName "startedAt"  -NotePropertyValue $startTime.ToString("o") -Force
         $_ | Add-Member -NotePropertyName "transcript" -NotePropertyValue $TranscriptFile -Force
     }
-    $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
+    ConvertTo-Json -InputObject $Queue -Depth 10 | Set-Content $QueueFile -Encoding utf8
 
     Write-Log "Starting: $($Next.id) [$($Next.type)] -- $($Next.repo)#$($Next.number)"
     Send-Toast "Working on $($Next.type)" "$($Next.repo) #$($Next.number)"
@@ -163,13 +163,13 @@ Set-Location '$($RepoRoot.Replace("'","''"))'
 
     $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
 
-    $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null })
+    [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null }
     $Queue | Where-Object { $_.id -eq $Next.id } | ForEach-Object {
         $_.status = $exitStatus
         $_ | Add-Member -NotePropertyName "completedAt" -NotePropertyValue (Get-Date -Format "o") -Force
         $_ | Add-Member -NotePropertyName "elapsedSec"  -NotePropertyValue $elapsed -Force
     }
-    $Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
+    ConvertTo-Json -InputObject $Queue -Depth 10 | Set-Content $QueueFile -Encoding utf8
 
     $pendingLeft = @($Queue | Where-Object { $_.status -eq "pending" }).Count
     Write-Log "$exitStatus $($Next.id) in ${elapsed}s. $pendingLeft remaining."

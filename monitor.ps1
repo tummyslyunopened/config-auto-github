@@ -28,8 +28,10 @@ function Test-AllowedAuthor {
     return $false
 }
 
-$Queue = if (Test-Path $QueueFile) { @(Get-Content $QueueFile -Raw | ConvertFrom-Json) } else { @() }
-$ExistingIds = @($Queue | ForEach-Object { $_.id })
+[array]$Queue = if (Test-Path $QueueFile) {
+    Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null }
+} else { @() }
+[array]$ExistingIds = $Queue | ForEach-Object { $_.id }
 
 $Since = (Get-Date).ToUniversalTime().AddMinutes(-7).ToString("yyyy-MM-ddTHH:mm:ssZ")
 $Added = 0
@@ -113,7 +115,7 @@ foreach ($R in $Repos) {
     } catch { Write-Log "[$slug] ERROR fetching PR comments: $_" "ERROR" }
 }
 
-$Queue | ConvertTo-Json -Depth 10 | Set-Content $QueueFile -Encoding utf8
+ConvertTo-Json -InputObject $Queue -Depth 10 | Set-Content $QueueFile -Encoding utf8
 $pendingCount = @($Queue | Where-Object { $_.status -eq "pending" }).Count
 Write-Log "Monitor done. +$Added queued. Pending: $pendingCount. Total: $($Queue.Count)."
 
