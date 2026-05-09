@@ -261,7 +261,11 @@ $split.Panel2.add_Resize({
 
 function Refresh-Transcript {
     $file = $script:SelectedTranscriptFile
-    if (-not $file) { $file = $LogFile }
+    # Coerce to a single string -- defensive against an upstream bug that would
+    # leave an Object[] sitting in SelectedTranscriptFile.
+    if ($file -is [array]) { $file = if ($file.Count -gt 0) { [string]$file[0] } else { "" } }
+    if ([string]::IsNullOrWhiteSpace($file)) { $file = $LogFile }
+    if ([string]::IsNullOrWhiteSpace($file)) { return }
     if (-not (Test-Path $file -ErrorAction SilentlyContinue)) { return }
     try { $content = [System.IO.File]::ReadAllText($file) } catch { return }
     if ($content.Length -eq $script:LastTranscriptLen) { return }
@@ -272,10 +276,10 @@ function Refresh-Transcript {
 }
 
 function Refresh-Status {
-    # Queue
-    $Queue = @()
+    # Queue (force [array] so a single-item or any-item JSON array does not unwrap/nest)
+    [array]$Queue = @()
     if (Test-Path $QueueFile) {
-        try { $Queue = @(Get-Content $QueueFile -Raw | ConvertFrom-Json) } catch {}
+        try { [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null } } catch {}
     }
 
     # Task scheduler state
