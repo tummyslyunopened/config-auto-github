@@ -27,9 +27,14 @@ $fUiBold = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontSt
 # State
 $script:MonitorProc            = $null
 $script:WorkerProc             = $null
+$script:MonitorAutoRun         = $false
+$script:WorkerAutoRun          = $false
+$script:LastMonitorStart       = $null
 $script:QueueIds               = @()
 $script:SelectedTranscriptFile = ""
 $script:LastTranscriptLen      = 0
+
+$MonitorIntervalSec = 300  # auto-rerun monitor every 5 minutes when toggled on
 
 # Form
 $form               = New-Object System.Windows.Forms.Form
@@ -154,23 +159,38 @@ $btnWrk = New-Btn "Run Worker"  190 622 170 36 $cBtnWrk
 $btnGh  = New-Btn "Open Issues" 8   664 352 30
 foreach ($b in @($btnMon, $btnWrk, $btnGh)) { $split.Panel1.Controls.Add($b) }
 
-$btnMon.add_Click({
-    $btnMon.Enabled = $false
-    $btnMon.Text = "Running..."
+function Start-MonitorRun {
+    $script:LastMonitorStart = Get-Date
     $script:MonitorProc = Start-Process "powershell.exe" `
         -ArgumentList "-NonInteractive -File `"$ScriptDir\monitor.ps1`"" `
         -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+}
+
+$btnMon.add_Click({
+    $script:MonitorAutoRun = -not $script:MonitorAutoRun
+    if ($script:MonitorAutoRun -and (-not $script:MonitorProc -or $script:MonitorProc.HasExited)) {
+        Start-MonitorRun
+    }
+    Refresh-Status
 })
 
-$btnWrk.add_Click({
-    $btnWrk.Enabled = $false
-    $btnWrk.Text = "Running..."
-    $script:SelectedTranscriptFile = $LogFile
-    $script:LastTranscriptLen = 0
-    $lblTranscript.Text = "Log -- main.log"
+function Start-WorkerRun {
     $script:WorkerProc = Start-Process "powershell.exe" `
         -ArgumentList "-NonInteractive -File `"$ScriptDir\worker.ps1`"" `
         -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+}
+
+$btnWrk.add_Click({
+    $script:WorkerAutoRun = -not $script:WorkerAutoRun
+    if ($script:WorkerAutoRun) {
+        $script:SelectedTranscriptFile = $LogFile
+        $script:LastTranscriptLen = 0
+        $lblTranscript.Text = "Log -- main.log"
+        if (-not $script:WorkerProc -or $script:WorkerProc.HasExited) {
+            Start-WorkerRun
+        }
+    }
+    Refresh-Status
 })
 
 $btnGh.add_Click({ Start-Process "https://github.com/tummyslyunopened/config/issues" })
@@ -266,12 +286,46 @@ function Refresh-Status {
         $lblActive.Text = ""
     }
 
-    # Re-enable buttons when processes finish
-    if ($script:MonitorProc -and $script:MonitorProc.HasExited) {
-        $btnMon.Text = "Run Monitor"; $btnMon.Enabled = $true; $script:MonitorProc = $null
+    # Clear finished process handles
+    if ($script:MonitorProc -and $script:MonitorProc.HasExited) { $script:MonitorProc = $null }
+    if ($script:WorkerProc  -and $script:WorkerProc.HasExited)  { $script:WorkerProc  = $null }
+
+    # Auto-rerun monitor on interval when toggled on
+    if ($script:MonitorAutoRun -and -not $script:MonitorProc) {
+        $elapsed = if ($script:LastMonitorStart) { ((Get-Date) - $script:LastMonitorStart).TotalSeconds } else { $MonitorIntervalSec + 1 }
+        if ($elapsed -ge $MonitorIntervalSec) { Start-MonitorRun }
     }
-    if ($script:WorkerProc -and $script:WorkerProc.HasExited) {
-        $btnWrk.Text = "Run Worker"; $btnWrk.Enabled = $true; $script:WorkerProc = $null
+
+    # Auto-restart worker whenever there is pending work
+    if ($script:WorkerAutoRun -and -not $script:WorkerProc -and $nPending -gt 0) {
+        Start-WorkerRun
+    }
+
+    # Update button text + colour based on toggle state and current process
+    $monBusy = ($script:MonitorProc -and -not $script:MonitorProc.HasExited)
+    if ($script:MonitorAutoRun) {
+        $btnMon.BackColor = $cGreen
+        if ($monBusy) {
+            $btnMon.Text = "Stop Monitor (running)"
+        } else {
+            $secsLeft = if ($script:LastMonitorStart) {
+                [int]($MonitorIntervalSec - ((Get-Date) - $script:LastMonitorStart).TotalSeconds)
+            } else { 0 }
+            if ($secsLeft -lt 0) { $secsLeft = 0 }
+            $btnMon.Text = "Stop Monitor (next ${secsLeft}s)"
+        }
+    } else {
+        $btnMon.BackColor = $cBtnMon
+        $btnMon.Text = if ($monBusy) { "Monitor running..." } else { "Start Monitor" }
+    }
+
+    $wrkBusy = ($script:WorkerProc -and -not $script:WorkerProc.HasExited)
+    if ($script:WorkerAutoRun) {
+        $btnWrk.BackColor = $cGreen
+        $btnWrk.Text = if ($wrkBusy) { "Stop Worker (busy)" } else { "Stop Worker (idle)" }
+    } else {
+        $btnWrk.BackColor = $cBtnWrk
+        $btnWrk.Text = if ($wrkBusy) { "Worker running..." } else { "Start Worker" }
     }
 
     # Rebuild queue list
