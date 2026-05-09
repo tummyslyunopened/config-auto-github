@@ -54,7 +54,7 @@ function Start-WorkerRun {
 # Form -- compact, portrait, no transcript pane.
 $form               = New-Object System.Windows.Forms.Form
 $form.Text          = "config-auto-github"
-$form.ClientSize    = New-Object System.Drawing.Size(1064, 580)
+$form.ClientSize    = New-Object System.Drawing.Size(1064, 640)
 $form.MinimumSize   = New-Object System.Drawing.Size(480, 480)
 $form.StartPosition = "CenterScreen"
 $form.BackColor     = $cBg
@@ -150,6 +150,79 @@ $lblIntUnit = New-Label "minutes" 350 444 120 $fUi 28
 $lblIntUnit.ForeColor = $cDim
 $form.Controls.Add($lblIntUnit)
 
+# Cancel row: pick a pending or in_progress item from the dropdown and kill it.
+$lblCancelCap = New-Label "Cancel item:" 16 496 140 $fUi 28
+$lblCancelCap.ForeColor = $cDim
+$form.Controls.Add($lblCancelCap)
+
+$cmbCancel = New-Object System.Windows.Forms.ComboBox
+$cmbCancel.Location      = New-Object System.Drawing.Point(160, 492)
+$cmbCancel.Size          = New-Object System.Drawing.Size(($form.ClientSize.Width - 320), 32)
+$cmbCancel.Anchor        = $horizAnchor
+$cmbCancel.BackColor     = $cPanel
+$cmbCancel.ForeColor     = $cText
+$cmbCancel.Font          = $fMono
+$cmbCancel.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$cmbCancel.FlatStyle     = [System.Windows.Forms.FlatStyle]::Flat
+$form.Controls.Add($cmbCancel)
+
+$btnCancel = New-Object System.Windows.Forms.Button
+$btnCancel.Text     = "Cancel"
+$btnCancel.Location = New-Object System.Drawing.Point(($form.ClientSize.Width - 152), 488)
+$btnCancel.Size     = New-Object System.Drawing.Size(144, 36)
+$btnCancel.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+$btnCancel.BackColor = [System.Drawing.Color]::FromArgb(150, 50, 50)
+$btnCancel.ForeColor = $cText
+$btnCancel.FlatStyle = "Flat"
+$btnCancel.Font     = $fUi
+$btnCancel.FlatAppearance.BorderSize = 0
+$form.Controls.Add($btnCancel)
+
+# Helper: kill any runner / claude process associated with a queue item id.
+function Stop-CagItem {
+    param([string]$ItemId)
+    if ([string]::IsNullOrWhiteSpace($ItemId)) { return }
+    # The runner is launched with a command line that contains either the
+    # prompt-file path (cag-prompt-<id>.txt) or the transcript path
+    # (logs\<id>.log). Match either.
+    $runners = @()
+    try {
+        $runners = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and (
+                    $_.CommandLine -like "*cag-prompt-$ItemId*" -or
+                    $_.CommandLine -like "*\logs\$ItemId.log*"
+                )
+            }
+    } catch {}
+    foreach ($r in $runners) {
+        try {
+            Get-CimInstance Win32_Process -Filter "ParentProcessId=$($r.ProcessId)" -ErrorAction SilentlyContinue |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch {}
+        Stop-Process -Id $r.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$btnCancel.add_Click({
+    if (-not $cmbCancel.SelectedItem) { return }
+    $entry = [string]$cmbCancel.SelectedItem
+    if ($entry -match "^\[\S+\]\s+(\S+)") {
+        $id = $matches[1]
+        try {
+            [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null }
+            $Queue | Where-Object { $_.id -eq $id } | ForEach-Object {
+                $_.status = "cancelled"
+                $_ | Add-Member -NotePropertyName "completedAt"  -NotePropertyValue (Get-Date -Format "o") -Force
+                $_ | Add-Member -NotePropertyName "cancelReason" -NotePropertyValue "cancelled from GUI" -Force
+            }
+            ConvertTo-Json -InputObject $Queue -Depth 10 | Set-Content $QueueFile -Encoding utf8
+        } catch {}
+        Stop-CagItem $id
+        Refresh-Status
+    }
+})
+
 # Button click handlers -- toggle auto-run on/off
 $btnMon.add_Click({
     $script:MonitorAutoRun = -not $script:MonitorAutoRun
@@ -233,6 +306,29 @@ function Refresh-Status {
     $wrkStateText = if ($script:WorkerAutoRun)  { if ($wrkBusy) { "busy"    } else { "armed" } } else { "off" }
     $lblMonitor.Text = "Monitor : $monStateText"
     $lblWorker.Text  = "Worker  : $wrkStateText"
+
+    # Repopulate the cancel dropdown with pending and in_progress items only.
+    $cancellable = $Queue | Where-Object { $_.status -in @("pending","in_progress") }
+    $newItems = @()
+    foreach ($it in $cancellable) {
+        $title = if ($it.title) { $it.title } else { "" }
+        if ($title.Length -gt 60) { $title = $title.Substring(0, 60) + "..." }
+        $newItems += "[$($it.status)] $($it.id) -- $title"
+    }
+    # Only rebuild when the set actually changed -- otherwise the dropdown
+    # collapses any time the user has it open.
+    $current = @($cmbCancel.Items | ForEach-Object { [string]$_ })
+    $changed = ($current.Count -ne $newItems.Count) -or (($current -join "|") -ne ($newItems -join "|"))
+    if ($changed) {
+        $prevSel = [string]$cmbCancel.SelectedItem
+        $cmbCancel.BeginUpdate()
+        $cmbCancel.Items.Clear()
+        foreach ($it in $newItems) { [void]$cmbCancel.Items.Add($it) }
+        $cmbCancel.EndUpdate()
+        if ($prevSel -and $cmbCancel.Items.Contains($prevSel)) {
+            $cmbCancel.SelectedItem = $prevSel
+        }
+    }
 }
 
 # Timer
