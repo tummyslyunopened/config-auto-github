@@ -4,61 +4,63 @@ Add-Type -AssemblyName System.Drawing
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot   = Split-Path -Parent $ScriptDir
 $QueueFile  = "$ScriptDir\queue.json"
-$LogFile    = "$ScriptDir\logs\main.log"
+$MonPidFile = "$ScriptDir\monitor.pid"
+$WrkPidFile = "$ScriptDir\worker.pid"
 
 # Colours
 $cBg     = [System.Drawing.Color]::FromArgb(20,  20,  20)
 $cPanel  = [System.Drawing.Color]::FromArgb(32,  32,  32)
-$cBorder = [System.Drawing.Color]::FromArgb(55,  55,  55)
 $cText   = [System.Drawing.Color]::FromArgb(220, 220, 220)
 $cDim    = [System.Drawing.Color]::FromArgb(120, 120, 120)
 $cGreen  = [System.Drawing.Color]::FromArgb(78,  201, 176)
-$cYellow = [System.Drawing.Color]::FromArgb(220, 180, 80)
-$cRed    = [System.Drawing.Color]::FromArgb(240, 90,  70)
 $cBtnMon = [System.Drawing.Color]::FromArgb(0,   100, 160)
 $cBtnWrk = [System.Drawing.Color]::FromArgb(30,  110, 60)
-$cBtnGh  = [System.Drawing.Color]::FromArgb(50,  50,  50)
 
-# Bigger fonts -- target screen is a 1080x2404 phone via remote desktop.
-$fMono   = New-Object System.Drawing.Font("Consolas",   11)
-$fMonoSm = New-Object System.Drawing.Font("Consolas",    9)
-$fUi     = New-Object System.Drawing.Font("Segoe UI",   11)
-$fUiBold = New-Object System.Drawing.Font("Segoe UI",   14, [System.Drawing.FontStyle]::Bold)
+$fMono   = New-Object System.Drawing.Font("Consolas", 11)
+$fUi     = New-Object System.Drawing.Font("Segoe UI", 11)
+$fUiBold = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+$fBtn    = New-Object System.Drawing.Font("Segoe UI", 13)
 
 # State
-$script:MonitorProc            = $null
-$script:WorkerProc             = $null
-$script:MonitorAutoRun         = $false
-$script:WorkerAutoRun          = $false
-$script:LastMonitorStart       = $null
-$script:QueueIds               = @()
-$script:SelectedTranscriptFile = ""
-$script:LastTranscriptLen      = 0
+$script:MonitorProc        = $null
+$script:WorkerProc         = $null
+$script:MonitorAutoRun     = $true   # auto-armed on launch
+$script:WorkerAutoRun      = $true   # auto-armed on launch
+$script:LastMonitorStart   = $null
+$script:MonitorIntervalSec = 300
 
-$script:MonitorIntervalSec = 300  # auto-rerun monitor; updated live by the interval picker
+function Test-PidAlive {
+    param([string]$PidFile)
+    if (-not (Test-Path $PidFile)) { return $false }
+    $text = Get-Content $PidFile -Raw -ErrorAction SilentlyContinue
+    if (-not $text) { return $false }
+    try { $cagPid = [int]($text.Trim()) } catch { return $false }
+    try { $null = Get-Process -Id $cagPid -ErrorAction Stop; return $true } catch { return $false }
+}
 
-# Form
+function Start-MonitorRun {
+    $script:LastMonitorStart = Get-Date
+    $script:MonitorProc = Start-Process "powershell.exe" `
+        -ArgumentList "-NonInteractive -File `"$ScriptDir\monitor.ps1`"" `
+        -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+}
+
+function Start-WorkerRun {
+    $script:WorkerProc = Start-Process "powershell.exe" `
+        -ArgumentList "-NonInteractive -File `"$ScriptDir\worker.ps1`"" `
+        -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
+}
+
+# Form -- compact, portrait, no transcript pane.
 $form               = New-Object System.Windows.Forms.Form
 $form.Text          = "config-auto-github"
-$form.Size          = New-Object System.Drawing.Size(1080, 2380)
-$form.MinimumSize   = New-Object System.Drawing.Size(480, 800)
+$form.Size          = New-Object System.Drawing.Size(1080, 540)
+$form.MinimumSize   = New-Object System.Drawing.Size(480, 420)
 $form.StartPosition = "CenterScreen"
 $form.BackColor     = $cBg
 $form.ForeColor     = $cText
 
-# Horizontal split: controls on top, transcript on bottom (portrait layout).
-$split                  = New-Object System.Windows.Forms.SplitContainer
-$split.Dock             = "Fill"
-$split.Orientation      = [System.Windows.Forms.Orientation]::Horizontal
-$split.SplitterDistance = 860
-$split.SplitterWidth    = 4
-$split.BackColor        = $cBorder
-$split.Panel1.BackColor = $cBg
-$split.Panel2.BackColor = $cBg
-$form.Controls.Add($split)
-
-# Helper: label
-function New-Label { param($text, $x, $y, $w = 340, $font = $fUi, $h = 24)
+function New-Label { param($text, $x, $y, $w = 1056, $font = $fUi, $h = 28)
     $l = New-Object System.Windows.Forms.Label
     $l.Text = $text
     $l.Location = New-Object System.Drawing.Point($x, $y)
@@ -69,106 +71,55 @@ function New-Label { param($text, $x, $y, $w = 340, $font = $fUi, $h = 24)
     $l
 }
 
-# Helper: button
-function New-Btn { param($text, $x, $y, $w, $h = 36, $col = $cBtnGh)
-    $b = New-Object System.Windows.Forms.Button
-    $b.Text = $text
-    $b.Location = New-Object System.Drawing.Point($x, $y)
-    $b.Size = New-Object System.Drawing.Size($w, $h)
-    $b.BackColor = $col
-    $b.ForeColor = $cText
-    $b.FlatStyle = "Flat"
-    $b.Font = $fUi
-    $b.FlatAppearance.BorderSize = 0
-    $b
-}
-
-# ---- TOP PANEL (status + queue + controls) ----
-
+# Title
 $lblTitle = New-Label "config-auto-github" 16 12 800 $fUiBold 32
-$split.Panel1.Controls.Add($lblTitle)
+$form.Controls.Add($lblTitle)
 
-# Status panel -- full width
-$pnlStatus           = New-Object System.Windows.Forms.Panel
-$pnlStatus.Location  = New-Object System.Drawing.Point(8, 56)
-$pnlStatus.Size      = New-Object System.Drawing.Size(1056, 144)
+# Status panel
+$pnlStatus = New-Object System.Windows.Forms.Panel
+$pnlStatus.Location = New-Object System.Drawing.Point(8, 56)
+$pnlStatus.Size     = New-Object System.Drawing.Size(1056, 168)
 $pnlStatus.BackColor = $cPanel
 $pnlStatus.BorderStyle = "FixedSingle"
-$split.Panel1.Controls.Add($pnlStatus)
+$form.Controls.Add($pnlStatus)
 
-$lblStatusHead           = New-Label "STATUS" 12 8 200 $fUi
-$lblStatusHead.ForeColor = $cDim
-$pnlStatus.Controls.Add($lblStatusHead)
-
-$lblMonitor = New-Label "Monitor : --" 12 32  1040 $fMono   28
-$lblWorker  = New-Label "Worker  : --" 12 60  1040 $fMono   28
-$lblCounts  = New-Label ""             12 88  1040 $fMono   28
-$lblActive  = New-Label ""             12 116 1040 $fMonoSm 24
+$lblMonitor = New-Label "Monitor : --" 12 12  1040 $fMono 28
+$lblWorker  = New-Label "Worker  : --" 12 44  1040 $fMono 28
+$lblCounts  = New-Label ""             12 80  1040 $fMono 28
+$lblActive  = New-Label ""             12 116 1040 $fMono 28
 $lblActive.ForeColor = $cGreen
 foreach ($l in @($lblMonitor, $lblWorker, $lblCounts, $lblActive)) { $pnlStatus.Controls.Add($l) }
 
-# Queue label
-$lblQHead = New-Label "QUEUE" 16 216 200 $fUi 24
-$lblQHead.ForeColor = $cDim
-$split.Panel1.Controls.Add($lblQHead)
+# Two big toggle buttons
+$btnMon = New-Object System.Windows.Forms.Button
+$btnMon.Text     = "Start Monitor"
+$btnMon.Location = New-Object System.Drawing.Point(8, 244)
+$btnMon.Size     = New-Object System.Drawing.Size(528, 96)
+$btnMon.BackColor = $cBtnMon
+$btnMon.ForeColor = $cText
+$btnMon.FlatStyle = "Flat"
+$btnMon.Font     = $fBtn
+$btnMon.FlatAppearance.BorderSize = 0
+$form.Controls.Add($btnMon)
 
-# Queue listbox -- full width, taller rows for touch
-$lstQueue             = New-Object System.Windows.Forms.ListBox
-$lstQueue.Location    = New-Object System.Drawing.Point(8, 244)
-$lstQueue.Size        = New-Object System.Drawing.Size(1056, 360)
-$lstQueue.BackColor   = $cPanel
-$lstQueue.ForeColor   = $cText
-$lstQueue.BorderStyle = "FixedSingle"
-$lstQueue.Font        = $fMono
-$lstQueue.DrawMode    = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
-$lstQueue.ItemHeight  = 32
-$split.Panel1.Controls.Add($lstQueue)
+$btnWrk = New-Object System.Windows.Forms.Button
+$btnWrk.Text     = "Start Worker"
+$btnWrk.Location = New-Object System.Drawing.Point(544, 244)
+$btnWrk.Size     = New-Object System.Drawing.Size(520, 96)
+$btnWrk.BackColor = $cBtnWrk
+$btnWrk.ForeColor = $cText
+$btnWrk.FlatStyle = "Flat"
+$btnWrk.Font     = $fBtn
+$btnWrk.FlatAppearance.BorderSize = 0
+$form.Controls.Add($btnWrk)
 
-$lstQueue.add_DrawItem({
-    param($s, $e)
-    $e.DrawBackground()
-    if ($e.Index -lt 0) { return }
-    $item = $s.Items[$e.Index]
-    if     ($item -match "^\[RUN\]")  { $col = $cGreen  }
-    elseif ($item -match "^\[OK \]")  { $col = $cDim    }
-    elseif ($item -match "^\[ERR\]")  { $col = $cRed    }
-    else                              { $col = $cYellow }
-    $brush = New-Object System.Drawing.SolidBrush($col)
-    # Centre vertically in the taller row.
-    $e.Graphics.DrawString($item, $e.Font, $brush, ($e.Bounds.X + 6), ($e.Bounds.Y + 8))
-    $brush.Dispose()
-    $e.DrawFocusRectangle()
-})
-
-$lstQueue.add_SelectedIndexChanged({
-    $i = $lstQueue.SelectedIndex
-    if ($i -lt 0 -or $i -ge $script:QueueIds.Count) { return }
-    $id   = $script:QueueIds[$i]
-    $file = "$ScriptDir\logs\$id.log"
-    $script:SelectedTranscriptFile = $file
-    $script:LastTranscriptLen = 0
-    if (Test-Path $file) {
-        $lblTranscript.Text = "Transcript -- $id"
-    } else {
-        $lblTranscript.Text = "Transcript -- $id  (not started yet)"
-        $rtb.Text = ""
-    }
-    Refresh-Transcript
-})
-
-# Buttons -- big touch targets, two-up row then full-width Open Issues
-$btnMon = New-Btn "Run Monitor" 8   620 520 64 $cBtnMon
-$btnWrk = New-Btn "Run Worker"  544 620 520 64 $cBtnWrk
-$btnGh  = New-Btn "Open Issues" 8   692 1056 56
-foreach ($b in @($btnMon, $btnWrk, $btnGh)) { $split.Panel1.Controls.Add($b) }
-
-# Monitor interval picker (1-60 minutes) -- bottom of the top panel
-$lblIntCap = New-Label "Monitor interval:" 16 766 220 $fUi 28
+# Monitor interval picker
+$lblIntCap = New-Label "Monitor interval:" 16 360 220 $fUi 28
 $lblIntCap.ForeColor = $cDim
-$split.Panel1.Controls.Add($lblIntCap)
+$form.Controls.Add($lblIntCap)
 
 $numInterval = New-Object System.Windows.Forms.NumericUpDown
-$numInterval.Location  = New-Object System.Drawing.Point(244, 762)
+$numInterval.Location  = New-Object System.Drawing.Point(244, 356)
 $numInterval.Size      = New-Object System.Drawing.Size(96, 32)
 $numInterval.Minimum   = 1
 $numInterval.Maximum   = 60
@@ -180,19 +131,13 @@ $numInterval.Font      = $fMono
 $numInterval.add_ValueChanged({
     $script:MonitorIntervalSec = [int]$numInterval.Value * 60
 })
-$split.Panel1.Controls.Add($numInterval)
+$form.Controls.Add($numInterval)
 
-$lblIntUnit = New-Label "minutes" 350 766 120 $fUi 28
+$lblIntUnit = New-Label "minutes" 350 360 120 $fUi 28
 $lblIntUnit.ForeColor = $cDim
-$split.Panel1.Controls.Add($lblIntUnit)
+$form.Controls.Add($lblIntUnit)
 
-function Start-MonitorRun {
-    $script:LastMonitorStart = Get-Date
-    $script:MonitorProc = Start-Process "powershell.exe" `
-        -ArgumentList "-NonInteractive -File `"$ScriptDir\monitor.ps1`"" `
-        -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
-}
-
+# Button click handlers -- toggle auto-run on/off
 $btnMon.add_Click({
     $script:MonitorAutoRun = -not $script:MonitorAutoRun
     if ($script:MonitorAutoRun -and (-not $script:MonitorProc -or $script:MonitorProc.HasExited)) {
@@ -201,101 +146,19 @@ $btnMon.add_Click({
     Refresh-Status
 })
 
-function Start-WorkerRun {
-    $script:WorkerProc = Start-Process "powershell.exe" `
-        -ArgumentList "-NonInteractive -File `"$ScriptDir\worker.ps1`"" `
-        -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
-}
-
 $btnWrk.add_Click({
     $script:WorkerAutoRun = -not $script:WorkerAutoRun
-    if ($script:WorkerAutoRun) {
-        $script:SelectedTranscriptFile = $LogFile
-        $script:LastTranscriptLen = 0
-        $lblTranscript.Text = "Log -- main.log"
-        if (-not $script:WorkerProc -or $script:WorkerProc.HasExited) {
-            Start-WorkerRun
-        }
+    if ($script:WorkerAutoRun -and (-not $script:WorkerProc -or $script:WorkerProc.HasExited)) {
+        Start-WorkerRun
     }
     Refresh-Status
 })
 
-$btnGh.add_Click({ Start-Process "https://github.com/tummyslyunopened/config/issues" })
-
-# ---- BOTTOM PANEL (transcript) ----
-
-$lblTranscript          = New-Object System.Windows.Forms.Label
-$lblTranscript.Text     = "Log -- main.log"
-$lblTranscript.Font     = $fUi
-$lblTranscript.ForeColor = $cDim
-$lblTranscript.Location = New-Object System.Drawing.Point(12, 12)
-$lblTranscript.Size     = New-Object System.Drawing.Size(800, 28)
-$split.Panel2.Controls.Add($lblTranscript)
-
-# Bigger touch target than the original 80x22 chip.
-$btnShowLog = New-Btn "main.log" 0 8 140 36
-$btnShowLog.Font = $fUi
-$btnShowLog.FlatAppearance.BorderSize = 0
-$split.Panel2.Controls.Add($btnShowLog)
-
-$btnShowLog.add_Click({
-    $script:SelectedTranscriptFile = $LogFile
-    $script:LastTranscriptLen = 0
-    $lblTranscript.Text = "Log -- main.log"
-    Refresh-Transcript
-})
-
-$rtb             = New-Object System.Windows.Forms.RichTextBox
-$rtb.BackColor   = [System.Drawing.Color]::FromArgb(16, 16, 16)
-$rtb.ForeColor   = $cText
-$rtb.Font        = $fMono
-$rtb.ReadOnly    = $true
-$rtb.BorderStyle = "None"
-$rtb.ScrollBars  = "Vertical"
-$rtb.WordWrap    = $false
-$rtb.Location    = New-Object System.Drawing.Point(0, 50)
-$split.Panel2.Controls.Add($rtb)
-
-$split.Panel2.add_Resize({
-    $rtb.Size = New-Object System.Drawing.Size($split.Panel2.Width, ($split.Panel2.Height - 50))
-    $btnShowLog.Location = New-Object System.Drawing.Point(($split.Panel2.Width - 152), 8)
-})
-
-# ---- Refresh logic ----
-
-function Refresh-Transcript {
-    $file = $script:SelectedTranscriptFile
-    # Coerce to a single string -- defensive against an upstream bug that would
-    # leave an Object[] sitting in SelectedTranscriptFile.
-    if ($file -is [array]) { $file = if ($file.Count -gt 0) { [string]$file[0] } else { "" } }
-    if ([string]::IsNullOrWhiteSpace($file)) { $file = $LogFile }
-    if ([string]::IsNullOrWhiteSpace($file)) { return }
-    if (-not (Test-Path $file -ErrorAction SilentlyContinue)) { return }
-    try { $content = [System.IO.File]::ReadAllText($file) } catch { return }
-    if ($content.Length -eq $script:LastTranscriptLen) { return }
-    $script:LastTranscriptLen = $content.Length
-    $atBottom = ($rtb.SelectionStart -ge ($rtb.TextLength - 20)) -or ($rtb.TextLength -lt 200)
-    $rtb.Text = $content
-    if ($atBottom) { $rtb.SelectionStart = $rtb.TextLength; $rtb.ScrollToCaret() }
-}
-
 function Refresh-Status {
-    # Queue (force [array] so a single-item or any-item JSON array does not unwrap/nest)
     [array]$Queue = @()
     if (Test-Path $QueueFile) {
         try { [array]$Queue = Get-Content $QueueFile -Raw | ConvertFrom-Json | Where-Object { $_ -ne $null } } catch {}
     }
-
-    # Task scheduler state
-    $monTask = Get-ScheduledTask -TaskName "config-auto-github-monitor" -ErrorAction SilentlyContinue
-    $wrkTask = Get-ScheduledTask -TaskName "config-auto-github-worker"  -ErrorAction SilentlyContinue
-    $mState  = if ($monTask) { "$($monTask.State)" } else { "not installed" }
-    $wState  = if ($wrkTask) { "$($wrkTask.State)"  } else { "not installed" }
-    if ($script:MonitorProc -and -not $script:MonitorProc.HasExited) { $mState = "running (manual)" }
-    if ($script:WorkerProc  -and -not $script:WorkerProc.HasExited)  { $wState  = "running (manual)" }
-
-    $lblMonitor.Text = "Monitor : $mState"
-    $lblWorker.Text  = "Worker  : $wState"
 
     $nPending = @($Queue | Where-Object { $_.status -eq "pending"     }).Count
     $nRun     = @($Queue | Where-Object { $_.status -eq "in_progress" }).Count
@@ -307,13 +170,6 @@ function Refresh-Status {
     if ($active) {
         $s = if ($active.startedAt) { [int]((Get-Date) - [datetime]$active.startedAt).TotalSeconds } else { 0 }
         $lblActive.Text = ">> $($active.id)  [${s}s]"
-        if ((-not $script:SelectedTranscriptFile) -or ($script:SelectedTranscriptFile -eq $LogFile)) {
-            if ($active.transcript) {
-                $script:SelectedTranscriptFile = $active.transcript
-                $script:LastTranscriptLen = 0
-                $lblTranscript.Text = "Transcript -- $($active.id)"
-            }
-        }
     } else {
         $lblActive.Text = ""
     }
@@ -322,19 +178,18 @@ function Refresh-Status {
     if ($script:MonitorProc -and $script:MonitorProc.HasExited) { $script:MonitorProc = $null }
     if ($script:WorkerProc  -and $script:WorkerProc.HasExited)  { $script:WorkerProc  = $null }
 
-    # Auto-rerun monitor on interval when toggled on
-    if ($script:MonitorAutoRun -and -not $script:MonitorProc) {
+    # Auto-rerun monitor on interval when armed
+    if ($script:MonitorAutoRun -and -not $script:MonitorProc -and -not (Test-PidAlive $MonPidFile)) {
         $elapsed = if ($script:LastMonitorStart) { ((Get-Date) - $script:LastMonitorStart).TotalSeconds } else { $script:MonitorIntervalSec + 1 }
         if ($elapsed -ge $script:MonitorIntervalSec) { Start-MonitorRun }
     }
 
-    # Auto-restart worker whenever there is pending work
-    if ($script:WorkerAutoRun -and -not $script:WorkerProc -and $nPending -gt 0) {
+    # Auto-restart worker when armed and queue has pending work
+    if ($script:WorkerAutoRun -and -not $script:WorkerProc -and -not (Test-PidAlive $WrkPidFile) -and $nPending -gt 0) {
         Start-WorkerRun
     }
 
-    # Update button text + colour based on toggle state and current process
-    $monBusy = ($script:MonitorProc -and -not $script:MonitorProc.HasExited)
+    $monBusy = ($script:MonitorProc -and -not $script:MonitorProc.HasExited) -or (Test-PidAlive $MonPidFile)
     if ($script:MonitorAutoRun) {
         $btnMon.BackColor = $cGreen
         if ($monBusy) {
@@ -352,7 +207,7 @@ function Refresh-Status {
         $btnMon.Text = if ($monBusy) { "Monitor running..." } else { "Start Monitor" }
     }
 
-    $wrkBusy = ($script:WorkerProc -and -not $script:WorkerProc.HasExited)
+    $wrkBusy = ($script:WorkerProc -and -not $script:WorkerProc.HasExited) -or (Test-PidAlive $WrkPidFile)
     if ($script:WorkerAutoRun) {
         $btnWrk.BackColor = $cGreen
         $btnWrk.Text = if ($wrkBusy) { "Stop Worker (busy)" } else { "Stop Worker (idle)" }
@@ -361,26 +216,10 @@ function Refresh-Status {
         $btnWrk.Text = if ($wrkBusy) { "Worker running..." } else { "Start Worker" }
     }
 
-    # Rebuild queue list
-    $prevSel = $lstQueue.SelectedIndex
-    $lstQueue.BeginUpdate()
-    $lstQueue.Items.Clear()
-    $script:QueueIds = @()
-    foreach ($item in ($Queue | Sort-Object addedAt -Descending)) {
-        $icon = switch ($item.status) {
-            "in_progress" { "[RUN]" }
-            "done"        { "[OK ]" }
-            "pending"     { "[ > ]" }
-            default       { "[ERR]" }
-        }
-        $repo = $item.repo.Split("/")[1]
-        $lstQueue.Items.Add("$icon $($item.type.PadRight(16)) $repo #$($item.number)") | Out-Null
-        $script:QueueIds += $item.id
-    }
-    $lstQueue.EndUpdate()
-    if ($prevSel -ge 0 -and $prevSel -lt $lstQueue.Items.Count) { $lstQueue.SelectedIndex = $prevSel }
-
-    Refresh-Transcript
+    $monStateText = if ($script:MonitorAutoRun) { if ($monBusy) { "running" } else { "armed" } } else { "off" }
+    $wrkStateText = if ($script:WorkerAutoRun)  { if ($wrkBusy) { "busy"    } else { "armed" } } else { "off" }
+    $lblMonitor.Text = "Monitor : $monStateText"
+    $lblWorker.Text  = "Worker  : $wrkStateText"
 }
 
 # Timer
@@ -389,7 +228,12 @@ $timer.Interval = 3000
 $timer.add_Tick({ Refresh-Status })
 $timer.Start()
 
-$form.add_Shown({ Refresh-Status })
+# On show: kick off both processes if they are not already running.
+$form.add_Shown({
+    if (-not (Test-PidAlive $MonPidFile)) { Start-MonitorRun }
+    if (-not (Test-PidAlive $WrkPidFile)) { Start-WorkerRun }
+    Refresh-Status
+})
 $form.add_FormClosed({ $timer.Stop() })
 
 [System.Windows.Forms.Application]::Run($form)
