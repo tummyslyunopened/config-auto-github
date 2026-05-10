@@ -24,8 +24,10 @@ $Repos = @(
     [PSCustomObject]@{ repo = "tummyslyunopened/fonts";          path = "fonts" },
     [PSCustomObject]@{ repo = "tummyslyunopened/wallpapers";     path = "wallpapers" },
     [PSCustomObject]@{ repo = "tummyslyunopened/images";         path = "images" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-itam";    path = "config-itam" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-itsm";    path = "config-itsm" }
+    [PSCustomObject]@{ repo = "tummyslyunopened/config-itam";                    path = "config-itam" },
+    [PSCustomObject]@{ repo = "tummyslyunopened/config-itsm";                    path = "config-itsm" },
+    [PSCustomObject]@{ repo = "tummyslyunopened/config-local-web-deploys";       path = "config-local-web-deploys" },
+    [PSCustomObject]@{ repo = "tummyslyunopened/config-auto-github-remote-view"; path = "config-auto-github-remote-view" }
 )
 
 function Test-AllowedAuthor {
