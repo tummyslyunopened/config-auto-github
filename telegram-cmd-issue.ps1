@@ -1,14 +1,24 @@
-# Handle a single "/issue <repo>: <title>\n<body...>" command from the designer.
+# Handle a /issue command from the designer.
 #
-# Parses the slug + title + optional body, resolves the slug to a watched
-# tummyslyunopened/* repo, runs `gh issue create`, and sends a confirmation
-# message (success URL or error) back to the designer via telegram-send.ps1.
+# The handler tries two strategies in order to be friendly to voice-to-text:
 #
-# This script never invokes claude. It is invoked by telegram-poll.ps1 when
-# an unsolicited message starting with /issue is detected.
+#   1. Strict regex: "<repo>: <title>\n<optional body>". Fast path when the
+#      designer types cleanly.
 #
-# Exit codes: 0 = created, 1 = rejected (already sent the user an error
-# message), 2 = config error.
+#   2. Claude-assisted extraction (haiku-4-5). On any of:
+#        - regex didn't match
+#        - regex matched but the repo isn't in the watched list (e.g. user
+#          said "itsm" rather than "config-itsm")
+#        - missing pieces
+#      ...invoke claude to extract {repo, title, body} from the free-form
+#      text. Cost: ~$0.001 per fallback, negligible vs the $50/mo budget.
+#
+# Both paths converge to the same gh issue create call. Claude is never
+# given any inbound Telegram text it wasn't asked to parse here -- the
+# usual reply-correlation security filter still applies to all other
+# bot/claude paths.
+#
+# Exit codes: 0 = created, 1 = user-rejected (already messaged), 2 = config
 
 param(
     [Parameter(Mandatory)] [string] $Body
@@ -25,7 +35,6 @@ function Send-Reply { param([string]$Text)
 }
 
 function Get-WatchedShortNames {
-    # Mirrors monitor.ps1's Get-CagWatchedRepos -- read the parent .gitmodules.
     $gm = Join-Path $RepoRoot ".gitmodules"
     $shortNames = @("config")   # parent always available
     if (-not (Test-Path $gm)) { return $shortNames }
@@ -48,61 +57,120 @@ function Get-WatchedShortNames {
     return $shortNames
 }
 
-# --- parse ---------------------------------------------------------------
+function Resolve-RepoShort {
+    param([string]$Short, [string[]]$Available)
+    if (-not $Short) { return $null }
+    $exact = $Available | Where-Object { $_ -eq $Short }
+    if ($exact) { return $exact[0] }
+    return $null
+}
+
+function Invoke-ClaudeExtract {
+    param([string]$Text, [string[]]$Available)
+    $claudeExe = "C:\Users\remote\.local\bin\claude.exe"
+    if (-not (Test-Path $claudeExe)) {
+        $found = Get-Command claude -ErrorAction SilentlyContinue
+        if ($found) { $claudeExe = $found.Source } else { return $null }
+    }
+    $repoList = ($Available -join ', ')
+    $prompt = @"
+You are extracting a GitHub issue from a user request. The text may be casual or transcribed from voice, so it may be loose, missing punctuation, or use shortened repo names.
+
+Available repo short-names (use EXACTLY one of these or empty string):
+$repoList
+
+User request:
+$Text
+
+Respond with ONLY a single line of valid JSON, no markdown, no preamble, no explanation:
+{"repo":"<short-name-or-empty>","title":"<concise title, max 80 chars>","body":"<remaining detail, or empty string>"}
+
+If the user mentions a repo by a shortened or fuzzy name (e.g. "itsm" or "the ticketing app"), map it to the best exact match from the list. If you cannot determine which repo, set "repo" to empty string.
+"@
+    try {
+        $response = & $claudeExe --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 $prompt 2>&1
+        # claude may wrap with backticks or extra text; pull the first {...} blob
+        $jsonText = ($response -join "`n")
+        if ($jsonText -match '\{[^{}]*\}') {
+            $extracted = $matches[0] | ConvertFrom-Json -ErrorAction Stop
+            return $extracted
+        }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+# --- input cleanup -------------------------------------------------------
 $Body = $Body.TrimEnd()
 if ([string]::IsNullOrWhiteSpace($Body)) {
-    Send-Reply "Usage: /issue <repo>: <title>`n<body lines, optional>`n`nSend /help for the repo list."
+    Send-Reply "Send /issue <repo> <title>. The body can follow on subsequent lines. /help shows the repo list."
     exit 1
 }
 
-# Split into first-line + rest
+$available = Get-WatchedShortNames
 $firstLine, $rest = $Body -split "`r?`n", 2
 $firstLine = $firstLine.Trim()
 
-# First line must be "<repo>: <title>"
-if ($firstLine -notmatch '^(\S+)\s*:\s*(.+)$') {
-    Send-Reply "Could not parse. Expected: /issue <repo>: <title>`nGot first line: '$firstLine'"
+# --- strategy 1: strict regex --------------------------------------------
+$resolvedShort = $null
+$title         = $null
+$issueBody     = $null
+
+if ($firstLine -match '^(\S+)\s*:\s*(.+)$') {
+    $shortGuess = $matches[1].Trim()
+    $titleGuess = $matches[2].Trim()
+    $resolvedShort = Resolve-RepoShort -Short $shortGuess -Available $available
+    if ($resolvedShort) {
+        $title     = $titleGuess
+        $issueBody = if ($rest) { $rest.Trim() } else { "" }
+    }
+}
+
+# --- strategy 2: claude extract (voice-to-text friendly) ----------------
+if (-not $resolvedShort) {
+    $extracted = Invoke-ClaudeExtract -Text $Body -Available $available
+    if ($extracted) {
+        $repoCandidate = if ($extracted.repo) { [string]$extracted.repo } else { "" }
+        $resolvedShort = Resolve-RepoShort -Short $repoCandidate -Available $available
+        if ($resolvedShort) {
+            $title     = [string]$extracted.title
+            $issueBody = if ($extracted.body) { [string]$extracted.body } else { "" }
+        }
+    }
+}
+
+# --- bail out if still no repo ------------------------------------------
+if (-not $resolvedShort) {
+    $list = ($available | Sort-Object) -join ', '
+    Send-Reply "Could not figure out which repo. Watched repos: $list"
     exit 1
 }
-$repoShort = $matches[1].Trim()
-$title     = $matches[2].Trim()
-$issueBody = if ($rest) { $rest.Trim() } else { "" }
-
-# --- resolve repo --------------------------------------------------------
-$available = Get-WatchedShortNames
-$exact = $available | Where-Object { $_ -eq $repoShort }
-if ($exact) {
-    $resolvedShort = $exact[0]
-} else {
-    $prefix = $available | Where-Object { $_.StartsWith($repoShort) }
-    if ($prefix.Count -eq 1) {
-        $resolvedShort = $prefix[0]
-    } elseif ($prefix.Count -gt 1) {
-        Send-Reply "Repo '$repoShort' is ambiguous. Candidates: $($prefix -join ', '). Retry with the full short name."
-        exit 1
-    } else {
-        $list = ($available | Sort-Object) -join ', '
-        Send-Reply "Unknown repo '$repoShort'. Available:`n$list"
-        exit 1
-    }
+if (-not $title) {
+    Send-Reply "Got the repo ($resolvedShort) but no usable title. Try again with a short description after the repo."
+    exit 1
 }
+
 $fullSlug = "tummyslyunopened/$resolvedShort"
 
-# --- create issue --------------------------------------------------------
+# --- create issue via gh, using a body file to dodge PowerShells empty-
+#     argument quirk that strips bare empty strings before they reach gh.
+$tempBody = [System.IO.Path]::GetTempFileName()
 try {
-    $url = if ($issueBody) {
-        & gh issue create --repo $fullSlug --title $title --body $issueBody 2>&1
-    } else {
-        & gh issue create --repo $fullSlug --title $title --body "" 2>&1
-    }
+    [System.IO.File]::WriteAllText($tempBody, $issueBody, [System.Text.UTF8Encoding]::new($false))
+    $output = & gh issue create --repo $fullSlug --title $title --body-file $tempBody 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Send-Reply "gh issue create failed for $fullSlug -- $url"
+        $err = ($output -join " ").Trim()
+        Send-Reply "gh issue create failed for $fullSlug. $err"
         exit 1
     }
-    $url = ($url | Select-Object -Last 1).Trim()
+    $url = (($output | Where-Object { $_ -match '^https?://' } | Select-Object -Last 1)).Trim()
+    if (-not $url) { $url = ($output | Select-Object -Last 1).Trim() }
 } catch {
     Send-Reply "gh issue create threw: $($_.Exception.Message)"
     exit 1
+} finally {
+    Remove-Item $tempBody -Force -ErrorAction SilentlyContinue
 }
 
 Send-Reply "Created issue in $fullSlug`n  $title`n  $url"

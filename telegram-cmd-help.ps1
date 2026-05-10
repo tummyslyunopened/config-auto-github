@@ -33,17 +33,21 @@ function Get-WatchedShortNames {
 
 $repos = (Get-WatchedShortNames) -join ', '
 $msg = @"
-Commands:
+Commands
 
   /issue <repo>: <title>
-    body lines, optional
-  Create a GitHub issue in the named repo.
-  The bot will reply with the issue URL.
+    optional body lines
+
+  Creates a GitHub issue and replies with the URL. Loose phrasing is
+  fine -- if the parser cannot match a watched repo from the first
+  word, the bot asks claude to extract repo + title from the full
+  text, so voice-to-text input like "/issue itsm fix the timezone bug"
+  works too.
 
   /help
   This message.
 
-Watched repos:
+Watched repos
   $repos
 "@
 
