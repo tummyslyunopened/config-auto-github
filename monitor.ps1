@@ -1,4 +1,5 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Split-Path -Parent $ScriptDir
 . "$ScriptDir\lib.ps1"
 
 $script:LogSource = "monitor"
@@ -16,19 +17,46 @@ $AllowedAuthors = @(
     "tummyslyunopened"
 )
 
-# config-auto-github is intentionally excluded -- the bot must not modify its own scripts.
-$Repos = @(
-    [PSCustomObject]@{ repo = "tummyslyunopened/config";         path = "." },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-manager"; path = "config-manager" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/themes";         path = "themes" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/fonts";          path = "fonts" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/wallpapers";     path = "wallpapers" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/images";         path = "images" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-itam";                    path = "config-itam" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-itsm";                    path = "config-itsm" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-local-web-deploys";       path = "config-local-web-deploys" },
-    [PSCustomObject]@{ repo = "tummyslyunopened/config-auto-github-remote-view"; path = "config-auto-github-remote-view" }
-)
+# Build the watched-repo list dynamically from the parent's .gitmodules so that
+# adding a new submodule to tummyslyunopened/config picks it up automatically on
+# the next monitor run, no edits to this script required. The parent itself is
+# always included; config-auto-github is always excluded (the bot must not
+# modify its own scripts); non-tummyslyunopened submodules are skipped.
+function Get-CagWatchedRepos {
+    param([string]$ConfigRoot)
+    $list = @()
+    # Parent is always watched.
+    $list += [PSCustomObject]@{ repo = "tummyslyunopened/config"; path = "." }
+
+    $gm = Join-Path $ConfigRoot ".gitmodules"
+    if (-not (Test-Path $gm)) {
+        Write-Log "no .gitmodules at $gm -- watching parent only" "WARN"
+        return $list
+    }
+
+    $currentPath = $null
+    foreach ($line in (Get-Content $gm)) {
+        $t = $line.Trim()
+        if ($t -match '^path\s*=\s*(.+)$') {
+            $currentPath = $matches[1].Trim()
+            continue
+        }
+        if ($t -match '^url\s*=\s*(.+)$' -and $currentPath) {
+            $url  = ($matches[1].Trim()) -replace '\.git$', ''
+            $slug = $null
+            if     ($url -match '^github:(.+)$')              { $slug = $matches[1] }
+            elseif ($url -match '^https://github\.com/(.+)$') { $slug = $matches[1] }
+            elseif ($url -match '^git@github\.com:(.+)$')     { $slug = $matches[1] }
+            if ($slug -and $slug -like 'tummyslyunopened/*' -and $slug -ne 'tummyslyunopened/config-auto-github') {
+                $list += [PSCustomObject]@{ repo = $slug; path = $currentPath }
+            }
+            $currentPath = $null
+        }
+    }
+    return $list
+}
+
+[array]$Repos = Get-CagWatchedRepos -ConfigRoot $RepoRoot
 
 function Test-AllowedAuthor {
     param([string]$Login, [string]$Context)
