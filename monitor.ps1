@@ -153,11 +153,6 @@ foreach ($R in $Repos) {
 }
 
 ConvertTo-Json -InputObject $Queue -Depth 10 | Set-Content $QueueFile -Encoding utf8
-
-# Drain the Telegram inbox once per monitor pass so unsolicited slash
-# commands (e.g. /issue) get dispatched even when no worker question is
-# outstanding. Best-effort -- a Telegram failure must not break the monitor.
-try { & "$ScriptDir\telegram-poll.ps1" 2>&1 | Out-Null } catch {}
 $pendingCount = @($Queue | Where-Object { $_.status -eq "pending" }).Count
 Write-Log "Monitor done. +$Added queued. Pending: $pendingCount. Total: $($Queue.Count)."
 
