@@ -81,36 +81,6 @@ foreach ($u in $updates) {
     }
 }
 
-# Second pass: dispatch slash-commands. We re-iterate the same updates so the
-# reply-correlation pass stays self-contained. A message is only a command if
-# it is NOT a reply (replies handled above) and the text starts with a
-# recognised command token.
-$commandsHandled = 0
-foreach ($u in $updates) {
-    $msg = $u.message
-    if (-not $msg) { continue }
-    if ($msg.chat.id -ne $cfg.ChatId) { continue }
-    if ($msg.from.id -ne $cfg.ChatId) { continue }
-    if ($msg.reply_to_message)        { continue }
-    $text = [string]$msg.text
-    if (-not $text) { continue }
-    if ($text -match '^/issue\b\s*(.*)$') {
-        # Capture everything after /issue, including any body lines on
-        # subsequent newlines. The handler script parses "<repo>: <title>"
-        # then optional body.
-        $payload = $matches[1]
-        $textLines = $text -split "`r?`n", 2
-        if ($textLines.Count -gt 1) { $payload = "$($matches[1])`n$($textLines[1])" }
-        & "$ScriptDir\telegram-cmd-issue.ps1" -Body $payload 2>&1 | Out-Null
-        $commandsHandled++
-    }
-    elseif ($text -match '^/help\b') {
-        & "$ScriptDir\telegram-cmd-help.ps1" 2>&1 | Out-Null
-        $commandsHandled++
-    }
-    # Anything else: silently logged to inbox.jsonl above, no reaction.
-}
-
 # Advance the offset cursor (Telegram retains updates until acked)
 if ($updates.Count -gt 0) {
     $newOffset = ($updates | Measure-Object -Property update_id -Maximum).Maximum + 1
@@ -120,5 +90,5 @@ if ($updates.Count -gt 0) {
 # Persist pending changes (and create the file even if empty so callers can read it)
 Write-TgPending -Cfg $cfg -Pending $pending
 
-Write-Output "polled=$($updates.Count) matched_replies=$matched commands_handled=$commandsHandled"
+Write-Output "polled=$($updates.Count) matched_replies=$matched"
 exit 0
