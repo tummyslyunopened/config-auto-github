@@ -20,3 +20,10 @@
     - `docs/workflow.md` when changing the deploy/sync workflow.
     - Leave unrelated pages alone.
 - Documentation updates ship in the **same PR** as the code change, not a follow-up. Reviewers see code and docs together.
+## Designer Q&A via Telegram
+
+- For low-stakes clarifying questions that aren't worth a full GitHub issue/comment, you may ask the designer directly via Telegram. Run, from a Bash tool, `pwsh.exe -NoProfile -File ./config-auto-github/telegram-ask.ps1 -Question "..." -TimeoutSec 300` (path is relative to repo root). It blocks up to 5 minutes waiting for a quoted-reply.
+- **Exit codes**: `0` = reply received (text printed on stdout, use it). `124` = timeout. `2/3/4` = configuration / network failure.
+- **On timeout (124)**: do NOT block further. Post a clarifying comment on the GitHub issue using `gh issue comment`, then end the session cleanly. The worker will pick up the issue again when the designer replies in GitHub (the monitor catches new comments on the next pass).
+- **Use sparingly**: questions interrupt the designer's day. Prefer concrete proposals to open-ended asks. Good: "I'm about to bump python to 3.13 in this submodule -- ok?" Bad: "what should I do here?"
+- `telegram-ask.ps1` is the **only** path through which designer-typed text can reach you. The script enforces a security filter (replies must be quoted-replies to your own outgoing message in the right chat) -- you cannot bypass it. Don't try to read `.data/telegram/` files directly; the inbox dump is unfiltered audit data.
