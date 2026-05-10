@@ -52,6 +52,12 @@ while ($true) {
 
     Write-Log "Starting: $($Next.id) [$($Next.type)] -- $($Next.repo)#$($Next.number)"
     Send-Toast "Working on $($Next.type)" "$($Next.repo) #$($Next.number)"
+    # Best-effort Telegram ping. Wrapped so a Telegram failure cannot break the worker.
+    try {
+        $tgMsg = "Worker started $($Next.type): $($Next.repo)#$($Next.number)"
+        if ($Next.title) { $tgMsg += " -- $($Next.title)" }
+        $null = & "$ScriptDir\telegram-send.ps1" -Body $tgMsg 2>$null
+    } catch {}
 
     $pathNote      = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
     $cdStep        = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
@@ -188,3 +194,6 @@ $Guidelines
 Remove-Item $PidFile -ErrorAction SilentlyContinue
 Write-Log "Worker: queue empty, exiting."
 Send-Toast "config-auto-github idle" "Queue empty -- waiting for next monitor run."
+try {
+    $null = & "$ScriptDir\telegram-send.ps1" -Body "Queue empty. Worker idle." 2>$null
+} catch {}
