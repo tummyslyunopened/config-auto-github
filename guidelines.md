@@ -11,3 +11,12 @@
 - Code paths to `.data/` should default to a sensible location (e.g. `BASE_DIR / '.data'` in Django, `$PSScriptRoot\.data\...` in PowerShell) but be overridable via an environment variable so deployments can relocate state if needed.
 - Some submodules use the user's SSH alias `github:owner/repo` form for git remotes (defined in their `~/.ssh/config` Host github stanza, which uses the `~/.ssh/github-primary` identity). This is intentional config — do not rewrite SSH alias URLs to plain `git@github.com:...` or HTTPS to "fix" a push failure. If a push fails with "Permission denied (publickey)", the remote URL is fine; the issue is that the calling shell does not have access to the SSH key. Investigate the key/agent state instead.
 - When adding a new submodule or git remote, prefer the `github:owner/repo` form to match the existing convention.
+- Before opening a PR, do a documentation pass on the affected repo:
+  - **README.md**: update if the change touches user-facing setup, run instructions, env vars, or any documented behaviour. If the repo has no README and your change introduces public behaviour, add one. Mirror the structure of similar repos (one-paragraph description, Stack, Setup, Configuration).
+  - **SPEC.md** (present in some repos like `config-itam`, `config-itsm`) is a **read-mostly source of truth** and its own header forbids adding to it without authorisation. Do not add new spec items. If your change implements something the spec already covers, you may tighten the wording. If you find spec/code drift, raise it in the PR description rather than silently editing the spec.
+  - **Parent docs site** at `tummyslyunopened/config/docs/` (mkdocs Material). Update only the pages your change actually affects:
+    - `docs/reference/submodules.md` when changing what a submodule does, its role, or how it is invoked.
+    - `docs/getting-started.md` when changing setup or onboarding steps.
+    - `docs/workflow.md` when changing the deploy/sync workflow.
+    - Leave unrelated pages alone.
+- Documentation updates ship in the **same PR** as the code change, not a follow-up. Reviewers see code and docs together.
