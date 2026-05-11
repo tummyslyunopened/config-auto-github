@@ -58,6 +58,13 @@ while ($true) {
         if ($Next.title) { $tgMsg += " -- $($Next.title)" }
         $null = & "$ScriptDir\telegram-send.ps1" -Body $tgMsg 2>$null
     } catch {}
+    # Post the current merge order (also refreshes .data/merge-guide.md).
+    try {
+        $mergeText = & "$ScriptDir\merge-guide.ps1" 2>$null
+        if ($mergeText) {
+            $null = & "$ScriptDir\telegram-send.ps1" -Body $mergeText 2>$null
+        }
+    } catch {}
 
     $pathNote = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
     $cdStep   = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
@@ -196,6 +203,14 @@ $Guidelines
     } elseif ($exitStatus -eq "error") {
         Send-Toast "claude ERROR" "$($Next.id) -- check logs\$($Next.id).log"
     }
+    # Refresh merge order after finishing this item (the worker likely opened
+    # or updated a PR, changing the order). Best-effort.
+    try {
+        $mergeText = & "$ScriptDir\merge-guide.ps1" 2>$null
+        if ($mergeText) {
+            $null = & "$ScriptDir\telegram-send.ps1" -Body $mergeText 2>$null
+        }
+    } catch {}
 }
 
 Remove-Item $PidFile -ErrorAction SilentlyContinue
