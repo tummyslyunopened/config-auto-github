@@ -6,6 +6,7 @@
 - Follow existing code conventions and style in whichever repo you are working in.
 - If the intent of a comment is unclear, ask for clarification rather than guessing.
 - Work on the single item you were given. Do not pick up other issues or PRs.
+- When your work is in a submodule, push your changes and open the submodule PR, then stop. **Do not** stage, commit, or push the parent's submodule pointer change. A separate scheduled sweep (`bump-sweep.ps1`, invoked at the tail of every monitor run) opens the parent bump PR once your submodule PR lands on the submodule's default branch.
 - Persistent runtime/instance data — SQLite databases, downloaded artefacts (e.g. image archives), caches, queue dumps, generated reports, anything per-deployment — must live under `<repo_root>/.data/`. Never write persistent state to `~/AppData`, `~/.config`, `/var`, or any other path outside the repo checkout.
 - When you add code that produces persistent state, also confirm that the repo's `.gitignore` excludes `.data/*` with a `!.data/.gitkeep` exception. If the rule is missing, add it as part of your change. The parent `tummyslyunopened/config` repo already has this; many submodules do not yet, so check.
 - Code paths to `.data/` should default to a sensible location (e.g. `BASE_DIR / '.data'` in Django, `$PSScriptRoot\.data\...` in PowerShell) but be overridable via an environment variable so deployments can relocate state if needed.

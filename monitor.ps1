@@ -17,45 +17,9 @@ $AllowedAuthors = @(
     "tummyslyunopened"
 )
 
-# Build the watched-repo list dynamically from the parent's .gitmodules so that
-# adding a new submodule to tummyslyunopened/config picks it up automatically on
-# the next monitor run, no edits to this script required. The parent itself is
-# always included; config-auto-github is always excluded (the bot must not
-# modify its own scripts); non-tummyslyunopened submodules are skipped.
-function Get-CagWatchedRepos {
-    param([string]$ConfigRoot)
-    $list = @()
-    # Parent is always watched.
-    $list += [PSCustomObject]@{ repo = "tummyslyunopened/config"; path = "." }
-
-    $gm = Join-Path $ConfigRoot ".gitmodules"
-    if (-not (Test-Path $gm)) {
-        Write-Log "no .gitmodules at $gm -- watching parent only" "WARN"
-        return $list
-    }
-
-    $currentPath = $null
-    foreach ($line in (Get-Content $gm)) {
-        $t = $line.Trim()
-        if ($t -match '^path\s*=\s*(.+)$') {
-            $currentPath = $matches[1].Trim()
-            continue
-        }
-        if ($t -match '^url\s*=\s*(.+)$' -and $currentPath) {
-            $url  = ($matches[1].Trim()) -replace '\.git$', ''
-            $slug = $null
-            if     ($url -match '^github:(.+)$')              { $slug = $matches[1] }
-            elseif ($url -match '^https://github\.com/(.+)$') { $slug = $matches[1] }
-            elseif ($url -match '^git@github\.com:(.+)$')     { $slug = $matches[1] }
-            if ($slug -and $slug -like 'tummyslyunopened/*' -and $slug -ne 'tummyslyunopened/config-auto-github') {
-                $list += [PSCustomObject]@{ repo = $slug; path = $currentPath }
-            }
-            $currentPath = $null
-        }
-    }
-    return $list
-}
-
+# Watched repos = parent + tummyslyunopened/* submodules from .gitmodules,
+# minus config-auto-github (the bot must never edit its own scripts).
+# Shared with merge-guide.ps1; see Get-CagWatchedRepos in lib.ps1.
 [array]$Repos = Get-CagWatchedRepos -ConfigRoot $RepoRoot
 
 function Test-AllowedAuthor {
@@ -191,6 +155,16 @@ if ($pendingCount -gt 0) {
         Start-ScheduledTask -TaskName "config-auto-github-worker"
         Write-Log "Monitor: started worker task."
     }
+}
+
+# Open a parent bump PR if any submodule's default branch is ahead of what
+# the parent points at. bump-sweep is idempotent (skips when an auto-sweep
+# PR is already open) and a no-op when there's no drift, so it's cheap to
+# call on every monitor tick. Failures here must not break the monitor.
+try {
+    & "$ScriptDir\bump-sweep.ps1"
+} catch {
+    Write-Log "bump-sweep raised: $_" "ERROR"
 }
 
 Remove-Item $PidFile -ErrorAction SilentlyContinue

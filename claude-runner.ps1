@@ -110,6 +110,14 @@ try {
                         $isErr = if ($b.is_error) { " (ERROR)" } else { "" }
                         W "[$(Now)]   -> result$isErr"
                         Write-Result $b.content
+                        # Only record IDs from successful tool calls -- an
+                        # is_error tool_result means the comment was never
+                        # actually posted (e.g. gh auth failure), so any URL
+                        # in the content would be from a help text or stale
+                        # stdout, not a real outgoing comment.
+                        if (-not $b.is_error) {
+                            Record-OutgoingCommentIds $b.content
+                        }
                     }
                 }
             }

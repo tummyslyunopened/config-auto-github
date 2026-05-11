@@ -58,11 +58,22 @@ while ($true) {
         if ($Next.title) { $tgMsg += " -- $($Next.title)" }
         $null = & "$ScriptDir\telegram-send.ps1" -Body $tgMsg 2>$null
     } catch {}
+    # Post the current merge order (also refreshes .data/merge-guide.md).
+    try {
+        $mergeText = & "$ScriptDir\merge-guide.ps1" 2>$null
+        if ($mergeText) {
+            $null = & "$ScriptDir\telegram-send.ps1" -Body $mergeText 2>$null
+        }
+    } catch {}
 
-    $pathNote      = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
-    $cdStep        = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
-    $submoduleStep = if ($Next.repoPath -ne ".") {
-        "cd $RepoRoot && git add $($Next.repoPath) && git commit -m 'chore: update $($Next.repoPath) submodule' && git push"
+    $pathNote = if ($Next.repoPath -eq ".") { "the repo root (.)" } else { "the submodule at ./$($Next.repoPath)" }
+    $cdStep   = if ($Next.repoPath -ne ".") { "cd $($Next.repoPath)" } else { "# already at repo root" }
+    # Parent bump is handled out-of-band by bump-sweep.ps1 (invoked at the
+    # tail of monitor.ps1). The worker MUST NOT attempt to commit/push the
+    # submodule pointer change on the parent -- main is protected and the
+    # bot has no parent feature branch to push onto.
+    $bumpNote = if ($Next.repoPath -ne ".") {
+        "Do not commit or push the parent-repo submodule pointer change. A separate scheduled sweep opens the parent bump PR after your submodule PR is merged."
     } else { "" }
 
     $Prompt = switch ($Next.type) {
@@ -82,7 +93,8 @@ Steps:
 4. Explore the codebase and implement a complete, correct fix
 5. Stage files explicitly (no git add -A), commit, push
 6. gh pr create --repo $($Next.repo) --title "fix: $($Next.title)" --body "Closes #$($Next.number)`n`n## Summary`n<what changed>"
-$submoduleStep
+
+$bumpNote
 
 $Guidelines
 "@
@@ -101,7 +113,8 @@ Steps:
    - Question     -> gh issue comment $($Next.number) --repo $($Next.repo) --body "..."
    - Instruction  -> $cdStep, implement change, open/update PR, reply confirming
    - Close request -> gh issue close $($Next.number) --repo $($Next.repo)
-$submoduleStep
+
+$bumpNote
 
 $Guidelines
 "@
@@ -121,7 +134,8 @@ Steps:
 4. Implement all review feedback
 5. Stage explicitly, commit, push
 6. gh pr comment $($Next.number) --repo $($Next.repo) --body "Addressed: <summary>"
-$submoduleStep
+
+$bumpNote
 
 $Guidelines
 "@
@@ -189,6 +203,14 @@ $Guidelines
     } elseif ($exitStatus -eq "error") {
         Send-Toast "claude ERROR" "$($Next.id) -- check logs\$($Next.id).log"
     }
+    # Refresh merge order after finishing this item (the worker likely opened
+    # or updated a PR, changing the order). Best-effort.
+    try {
+        $mergeText = & "$ScriptDir\merge-guide.ps1" 2>$null
+        if ($mergeText) {
+            $null = & "$ScriptDir\telegram-send.ps1" -Body $mergeText 2>$null
+        }
+    } catch {}
 }
 
 Remove-Item $PidFile -ErrorAction SilentlyContinue
