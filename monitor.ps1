@@ -157,6 +157,40 @@ if ($pendingCount -gt 0) {
     }
 }
 
+# Quiet-period heartbeat to Telegram. Only fires when the last heartbeat
+# was >=1h ago (or never), so:
+#   - normal cadence is ~once an hour, not every 5-min monitor tick
+#   - after a long quiet stretch or a host restart, the next monitor run
+#     confirms the bot is alive
+# Failures here cannot break the monitor.
+$HeartbeatFile = "$ScriptDir\.data\last-monitor-heartbeat.txt"
+$null = New-Item -ItemType Directory -Force -Path (Split-Path $HeartbeatFile -Parent)
+$shouldHeartbeat = $false
+if (-not (Test-Path $HeartbeatFile)) {
+    $shouldHeartbeat = $true
+} else {
+    try {
+        $lastHb = [DateTime]::Parse((Get-Content $HeartbeatFile -Raw).Trim())
+        if ((Get-Date) - $lastHb -gt (New-TimeSpan -Hours 1)) {
+            $shouldHeartbeat = $true
+        }
+    } catch {
+        # Unreadable -> treat as missing.
+        $shouldHeartbeat = $true
+    }
+}
+if ($shouldHeartbeat) {
+    $hbMsg = "Monitor heartbeat: $pendingCount pending / $($Queue.Count) total"
+    if ($Added -gt 0) { $hbMsg += " (+$Added this tick)" }
+    try {
+        $null = & "$ScriptDir\telegram-send.ps1" -Body $hbMsg 2>$null
+        Set-Content -Path $HeartbeatFile -Value ((Get-Date).ToString("o")) -Encoding utf8
+        Write-Log "Heartbeat sent: $hbMsg"
+    } catch {
+        Write-Log "Heartbeat send failed: $_" "WARN"
+    }
+}
+
 # Open a parent bump PR if any submodule's default branch is ahead of what
 # the parent points at. bump-sweep is idempotent (skips when an auto-sweep
 # PR is already open) and a no-op when there's no drift, so it's cheap to
