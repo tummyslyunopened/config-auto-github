@@ -73,6 +73,25 @@ function Test-AllowedAuthor {
 $Since = (Get-Date).ToUniversalTime().AddMinutes(-7).ToString("yyyy-MM-ddTHH:mm:ssZ")
 $Added = 0
 
+# Load IDs of comments the bot itself posted in prior runs (recorded by
+# claude-runner.ps1 from gh's stdout). We skip these on the way back in
+# so the bot does not loop on its own confirmation messages. Empty set
+# if the file is missing or unreadable (cold-start safe).
+$OutgoingCommentsFile = "$ScriptDir\.data\outgoing-comments.jsonl"
+$OutgoingIssueCommentIds   = [System.Collections.Generic.HashSet[long]]::new()
+$OutgoingPrReviewCommentIds = [System.Collections.Generic.HashSet[long]]::new()
+if (Test-Path $OutgoingCommentsFile) {
+    foreach ($line in (Get-Content $OutgoingCommentsFile)) {
+        try {
+            $e = $line | ConvertFrom-Json
+            switch ($e.kind) {
+                "issue_comment"     { [void]$OutgoingIssueCommentIds.Add([long]$e.id) }
+                "pr_review_comment" { [void]$OutgoingPrReviewCommentIds.Add([long]$e.id) }
+            }
+        } catch {}
+    }
+}
+Write-Log "Monitor: $($OutgoingIssueCommentIds.Count) prior issue-comment IDs and $($OutgoingPrReviewCommentIds.Count) PR-review-comment IDs loaded for self-filter."
 Write-Log "Monitor run started. Checking $($Repos.Count) repos since $Since. Allowlist: $($AllowedAuthors -join ', ')."
 
 foreach ($R in $Repos) {
@@ -114,6 +133,10 @@ foreach ($R in $Repos) {
             $login = $c.user.login; $type = $c.user.type
             Write-Log "[$slug] comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
             if (-not (Test-AllowedAuthor $login "issue-comment $($c.id) in $slug")) { continue }
+            if ($OutgoingIssueCommentIds.Contains([long]$c.id)) {
+                Write-Log "[$slug] comment $($c.id) skipped -- bot posted it (outgoing-id self-filter)"
+                continue
+            }
             $id = "comment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $issueNum = [int]($c.issue_url -replace ".*/")
@@ -138,6 +161,10 @@ foreach ($R in $Repos) {
             $login = $c.user.login; $type = $c.user.type
             Write-Log "[$slug] pr-comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
             if (-not (Test-AllowedAuthor $login "pr-comment $($c.id) in $slug")) { continue }
+            if ($OutgoingPrReviewCommentIds.Contains([long]$c.id)) {
+                Write-Log "[$slug] pr-comment $($c.id) skipped -- bot posted it (outgoing-id self-filter)"
+                continue
+            }
             $id = "prcomment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $prNum = [int]($c.pull_request_url -replace ".*/")
