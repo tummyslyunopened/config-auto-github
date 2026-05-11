@@ -193,4 +193,14 @@ if ($pendingCount -gt 0) {
     }
 }
 
+# Open a parent bump PR if any submodule's default branch is ahead of what
+# the parent points at. bump-sweep is idempotent (skips when an auto-sweep
+# PR is already open) and a no-op when there's no drift, so it's cheap to
+# call on every monitor tick. Failures here must not break the monitor.
+try {
+    & "$ScriptDir\bump-sweep.ps1"
+} catch {
+    Write-Log "bump-sweep raised: $_" "ERROR"
+}
+
 Remove-Item $PidFile -ErrorAction SilentlyContinue
