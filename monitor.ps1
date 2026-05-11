@@ -114,6 +114,14 @@ foreach ($R in $Repos) {
             $login = $c.user.login; $type = $c.user.type
             Write-Log "[$slug] comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
             if (-not (Test-AllowedAuthor $login "issue-comment $($c.id) in $slug")) { continue }
+            # Skip comments the bot posted itself. The bot is required by
+            # guidelines.md to include this hidden HTML-comment marker on
+            # every comment it posts; filtering here prevents infinite
+            # confirmation loops where the bot responds to its own replies.
+            if ($c.body -and $c.body -match '<!-- cag-bot -->') {
+                Write-Log "[$slug] comment $($c.id) skipped -- self-authored (cag-bot marker)"
+                continue
+            }
             $id = "comment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $issueNum = [int]($c.issue_url -replace ".*/")
@@ -138,6 +146,10 @@ foreach ($R in $Repos) {
             $login = $c.user.login; $type = $c.user.type
             Write-Log "[$slug] pr-comment id=$($c.id) login='$login' type='$type' created=$($c.created_at)"
             if (-not (Test-AllowedAuthor $login "pr-comment $($c.id) in $slug")) { continue }
+            if ($c.body -and $c.body -match '<!-- cag-bot -->') {
+                Write-Log "[$slug] pr-comment $($c.id) skipped -- self-authored (cag-bot marker)"
+                continue
+            }
             $id = "prcomment-$($c.id)"
             if ($id -in $ExistingIds) { continue }
             $prNum = [int]($c.pull_request_url -replace ".*/")

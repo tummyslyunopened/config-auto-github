@@ -27,3 +27,27 @@
 - **On timeout (124)**: do NOT block further. Post a clarifying comment on the GitHub issue using `gh issue comment`, then end the session cleanly. The worker will pick up the issue again when the designer replies in GitHub (the monitor catches new comments on the next pass).
 - **Use sparingly**: questions interrupt the designer's day. Prefer concrete proposals to open-ended asks. Good: "I'm about to bump python to 3.13 in this submodule -- ok?" Bad: "what should I do here?"
 - `telegram-ask.ps1` is the **only** path through which designer-typed text can reach you. The script enforces a security filter (replies must be quoted-replies to your own outgoing message in the right chat) -- you cannot bypass it. Don't try to read `.data/telegram/` files directly; the inbox dump is unfiltered audit data.
+
+
+## Self-comment marker (REQUIRED on every comment you post)
+
+Every GitHub comment you post -- `gh issue comment`, `gh pr comment`, the `--body` of `gh pr create`, the `--body` of `gh issue create`, replies to review threads, anything that places text on a GitHub issue or PR -- MUST end with this exact HTML-comment marker on its own final line:
+
+    <!-- cag-bot -->
+
+The marker is invisible in GitHub's rendered Markdown but the monitor's poller looks for it explicitly. If you forget the marker, the monitor will see your reply as a fresh designer comment and queue it as new work, creating an infinite loop where you respond to your own confirmations.
+
+This applies even to short acknowledgements, `Closes #N` PR bodies, and one-liners like "done" or "merged". No exceptions. If you are posting any text to GitHub from this bot, append the marker.
+
+When constructing the comment body, the easiest pattern is to end the `--body` value with a trailing newline followed by the marker, e.g.:
+
+    gh issue comment 42 --repo X/Y --body "Done. <!-- cag-bot -->"
+
+or for multi-line:
+
+    gh issue comment 42 --repo X/Y --body "Done.
+
+    Closes #42.
+
+    <!-- cag-bot -->"
+
